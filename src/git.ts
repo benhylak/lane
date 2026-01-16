@@ -75,24 +75,48 @@ export function getMainWorktree(cwd: string = process.cwd()): string | null {
 }
 
 /**
- * Get all untracked files (respecting .gitignore)
+ * Get untracked and ignored items using git status (fast, single command)
  */
 export function getUntrackedFiles(cwd: string): string[] {
+  const untrackedItems = new Set<string>();
+
   try {
-    const output = execSync("git ls-files --others --exclude-standard", {
+    // git status --ignored --porcelain shows:
+    // ?? file  - untracked
+    // !! file  - ignored
+    // It shows directories as "dir/" so we don't get every file inside
+    const output = execSync("git status --ignored --porcelain", {
       cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large repos
+      maxBuffer: 50 * 1024 * 1024,
     });
 
-    return output
-      .trim()
-      .split("\n")
-      .filter((f) => f.length > 0);
-  } catch {
-    return [];
+    for (const line of output.split("\n")) {
+      if (!line) continue;
+
+      const status = line.substring(0, 2);
+      let filePath = line.substring(3);
+
+      // Remove trailing slash for directories
+      if (filePath.endsWith("/")) {
+        filePath = filePath.slice(0, -1);
+      }
+
+      // ?? = untracked, !! = ignored
+      if (status === "??" || status === "!!") {
+        untrackedItems.add(filePath);
+      }
+    }
+  } catch (e: any) {
+    process.stderr.write(`  [git status failed: ${e.message}]\n`);
   }
+
+  if (untrackedItems.size > 0) {
+    process.stderr.write(`  [found ${untrackedItems.size} untracked/ignored items]\n`);
+  }
+
+  return Array.from(untrackedItems);
 }
 
 /**
@@ -210,5 +234,20 @@ export function deleteBranch(
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e.message || String(e) };
+  }
+}
+
+/**
+ * Get the current branch of a git repo/worktree
+ */
+export function getCurrentBranch(repoPath: string): string | null {
+  try {
+    return execSync("git branch --show-current", {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim() || null;
+  } catch {
+    return null;
   }
 }

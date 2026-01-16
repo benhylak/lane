@@ -8,40 +8,51 @@ export interface Lane {
   createdAt: string;
 }
 
+export type CopyMode = "worktree" | "full";
+
 export interface LanesConfig {
   version: number;
   lanes: Lane[];
   settings: {
+    copyMode: CopyMode;
+    skipBuildArtifacts: boolean;
     skipPatterns: string[];
     autoInstall: boolean;
   };
 }
 
+// Build artifact patterns that can be optionally skipped
+const BUILD_ARTIFACT_PATTERNS = [
+  "node_modules",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  "target", // Rust
+  "build", // Various
+  "dist", // Various
+  ".next", // Next.js
+  ".nuxt", // Nuxt
+  ".turbo", // Turbo
+  "vendor", // Go/PHP
+  ".gradle", // Gradle
+  ".m2", // Maven
+  "Pods", // CocoaPods
+];
+
 const DEFAULT_CONFIG: LanesConfig = {
   version: 1,
   lanes: [],
   settings: {
-    skipPatterns: [
-      "node_modules",
-      ".venv",
-      "venv",
-      "__pycache__",
-      ".pytest_cache",
-      ".mypy_cache",
-      "target", // Rust
-      "build", // Various
-      "dist", // Various
-      ".next", // Next.js
-      ".nuxt", // Nuxt
-      ".turbo", // Turbo
-      "vendor", // Go/PHP
-      ".gradle", // Gradle
-      ".m2", // Maven
-      "Pods", // CocoaPods
-    ],
+    copyMode: "full", // Full copy by default
+    skipBuildArtifacts: false, // Copy everything by default
+    skipPatterns: [], // User-defined patterns to skip
     autoInstall: true,
   },
 };
+
+export { BUILD_ARTIFACT_PATTERNS };
 
 /**
  * Get the path to the lanes config file
@@ -64,7 +75,6 @@ export function loadConfig(gitRoot: string): LanesConfig {
     const content = readFileSync(configPath, "utf-8");
     const config = JSON.parse(content) as LanesConfig;
 
-    // Merge with defaults to handle missing fields
     return {
       ...DEFAULT_CONFIG,
       ...config,
@@ -131,4 +141,37 @@ export function getLane(gitRoot: string, laneName: string): Lane | null {
 export function getAllLanes(gitRoot: string): Lane[] {
   const config = loadConfig(gitRoot);
   return config.lanes;
+}
+
+/**
+ * Get the path to the lane history file
+ */
+function getHistoryPath(gitRoot: string): string {
+  return path.join(gitRoot, ".git", "lanes-history");
+}
+
+/**
+ * Record a lane switch in history (for lane - support)
+ */
+export function recordLaneSwitch(gitRoot: string, fromPath: string): void {
+  const historyPath = getHistoryPath(gitRoot);
+  writeFileSync(historyPath, fromPath);
+}
+
+/**
+ * Get the previous lane path (for lane - support)
+ */
+export function getPreviousLane(gitRoot: string): string | null {
+  const historyPath = getHistoryPath(gitRoot);
+
+  if (!existsSync(historyPath)) {
+    return null;
+  }
+
+  try {
+    const previousPath = readFileSync(historyPath, "utf-8").trim();
+    return existsSync(previousPath) ? previousPath : null;
+  } catch {
+    return null;
+  }
 }
