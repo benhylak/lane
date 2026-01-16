@@ -59,7 +59,8 @@ Or use the interactive picker (`lane`) to select and bulk-delete multiple lanes 
 ## Install
 
 ```bash
-npm install -g git+ssh://git@github.com:benhylak/lane.git
+git clone https://github.com/benhylak/lane.git
+npm install -g ./lane
 lane init-shell
 source ~/.zshrc   # or restart your terminal
 ```
