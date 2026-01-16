@@ -4,6 +4,10 @@
 
 Work on multiple branches at once. No stashing, no context switching. Just `lane feature-x` and you're there.
 
+## Why not git worktrees?
+
+While you should probably use git worktrees, they don't copy your `.env` files, you can't checkout the same branch twice, and deleting them wrong leaves orphaned refs. Minor annoyances, but annoying enough for me not to bother with them. Lane just copies the whole folder.
+
 ## How It Works
 
 Lane creates full copies of your repo in sibling directories:
