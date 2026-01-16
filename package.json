@@ -6,10 +6,6 @@
   "bin": {
     "lane": "./dist/cli.js"
   },
-  "files": [
-    "dist/**/*",
-    "src/**/*"
-  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
