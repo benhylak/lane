@@ -1,5 +1,7 @@
 # Lane
 
+**A brain-dead alternative to git worktrees.**
+
 Work on multiple branches at once. No stashing, no context switching.
 
 ```bash
