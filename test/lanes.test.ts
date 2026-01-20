@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   realpathSync,
+  lstatSync,
 } from "node:fs";
 import path from "node:path";
 import {
@@ -1109,6 +1110,183 @@ describe("lanes", () => {
         Bun.spawn = originalSpawn;
       }
     }, 10000);
+  });
+
+  describe("env file handling - copied not symlinked", () => {
+    test("should copy .env files (not symlink) via copyUntrackedFiles", async () => {
+      const srcDir = path.join(testDir, "env-source");
+      const destDir = path.join(testDir, "env-dest");
+      mkdirSync(srcDir, { recursive: true });
+      mkdirSync(destDir, { recursive: true });
+      setupTestRepo(srcDir);
+
+      // Create .env files
+      const envContent = "DATABASE_URL=postgres://localhost/test\nAPI_KEY=secret123\n";
+      writeFileSync(path.join(srcDir, ".env"), envContent);
+      writeFileSync(path.join(srcDir, ".env.local"), "LOCAL_VAR=1\n");
+      writeFileSync(path.join(srcDir, ".env.production"), "PROD=true\n");
+
+      // Copy untracked files
+      const copied = await copyUntrackedFiles(srcDir, destDir, []);
+
+      // Verify .env files were copied
+      expect(existsSync(path.join(destDir, ".env"))).toBe(true);
+      expect(existsSync(path.join(destDir, ".env.local"))).toBe(true);
+      expect(existsSync(path.join(destDir, ".env.production"))).toBe(true);
+
+      // Verify they are REAL files, not symlinks
+      expect(lstatSync(path.join(destDir, ".env")).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path.join(destDir, ".env.local")).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path.join(destDir, ".env.production")).isSymbolicLink()).toBe(false);
+
+      // Verify content is identical
+      expect(readFileSync(path.join(destDir, ".env"), "utf-8")).toBe(envContent);
+    });
+
+    test("should copy *.local config files (not symlink)", async () => {
+      const srcDir = path.join(testDir, "local-source");
+      const destDir = path.join(testDir, "local-dest");
+      mkdirSync(srcDir, { recursive: true });
+      mkdirSync(destDir, { recursive: true });
+      setupTestRepo(srcDir);
+
+      // Create .local files
+      writeFileSync(path.join(srcDir, "config.local.json"), '{"local": true}');
+      writeFileSync(path.join(srcDir, "settings.local.ts"), "export const local = true");
+      writeFileSync(path.join(srcDir, "app.local.yaml"), "debug: true");
+
+      // Copy untracked files
+      await copyUntrackedFiles(srcDir, destDir, []);
+
+      // Verify .local files exist and are real files (not symlinks)
+      expect(existsSync(path.join(destDir, "config.local.json"))).toBe(true);
+      expect(existsSync(path.join(destDir, "settings.local.ts"))).toBe(true);
+      expect(existsSync(path.join(destDir, "app.local.yaml"))).toBe(true);
+
+      expect(lstatSync(path.join(destDir, "config.local.json")).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path.join(destDir, "settings.local.ts")).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path.join(destDir, "app.local.yaml")).isSymbolicLink()).toBe(false);
+    });
+
+    test("should copy .secret* files (not symlink)", async () => {
+      const srcDir = path.join(testDir, "secret-source");
+      const destDir = path.join(testDir, "secret-dest");
+      mkdirSync(srcDir, { recursive: true });
+      mkdirSync(destDir, { recursive: true });
+      setupTestRepo(srcDir);
+
+      // Create secret files
+      writeFileSync(path.join(srcDir, ".secret"), "top_secret_key");
+      writeFileSync(path.join(srcDir, ".secrets.json"), '{"key": "value"}');
+
+      // Copy untracked files
+      await copyUntrackedFiles(srcDir, destDir, []);
+
+      // Verify .secret* files exist and are real files (not symlinks)
+      expect(existsSync(path.join(destDir, ".secret"))).toBe(true);
+      expect(existsSync(path.join(destDir, ".secrets.json"))).toBe(true);
+
+      expect(lstatSync(path.join(destDir, ".secret")).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path.join(destDir, ".secrets.json")).isSymbolicLink()).toBe(false);
+    });
+
+    test("should copy nested .env files (not symlink)", async () => {
+      const srcDir = path.join(testDir, "nested-source");
+      const destDir = path.join(testDir, "nested-dest");
+      mkdirSync(srcDir, { recursive: true });
+      mkdirSync(destDir, { recursive: true });
+      setupTestRepo(srcDir);
+
+      // Create nested directory structure with .env files
+      const configDir = path.join(srcDir, "config");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(path.join(configDir, ".env"), "CONFIG_ENV=value");
+
+      const servicesDir = path.join(srcDir, "services", "api");
+      mkdirSync(servicesDir, { recursive: true });
+      writeFileSync(path.join(servicesDir, ".env"), "API_ENV=value");
+
+      // Copy untracked files
+      const copied = await copyUntrackedFiles(srcDir, destDir, []);
+
+      // Verify nested .env files are real files (not symlinks)
+      const nestedEnvPath = path.join(destDir, "config", ".env");
+      const apiEnvPath = path.join(destDir, "services", "api", ".env");
+
+      expect(existsSync(nestedEnvPath)).toBe(true);
+      expect(existsSync(apiEnvPath)).toBe(true);
+
+      expect(lstatSync(nestedEnvPath).isSymbolicLink()).toBe(false);
+      expect(lstatSync(apiEnvPath).isSymbolicLink()).toBe(false);
+    });
+
+    test("should allow independent .env files per lane (via copyUntrackedFiles)", async () => {
+      const mainDir = path.join(testDir, "env-independence-main");
+      const laneADir = path.join(testDir, "env-independence-a");
+      const laneBDir = path.join(testDir, "env-independence-b");
+
+      mkdirSync(mainDir, { recursive: true });
+      mkdirSync(laneADir, { recursive: true });
+      mkdirSync(laneBDir, { recursive: true });
+
+      setupTestRepo(mainDir);
+
+      // Create initial .env in main
+      const originalContent = "MAIN_ENV=original\n";
+      writeFileSync(path.join(mainDir, ".env"), originalContent);
+
+      // Copy to lane A
+      await copyUntrackedFiles(mainDir, laneADir, []);
+
+      // Modify .env in lane A
+      const laneAEnvPath = path.join(laneADir, ".env");
+      writeFileSync(laneAEnvPath, "LANE_A_ENV=modified\n");
+
+      // Copy to lane B (should get original content, not lane A's modified version)
+      await copyUntrackedFiles(mainDir, laneBDir, []);
+
+      const laneBEnvPath = path.join(laneBDir, ".env");
+
+      // Verify lane B has original content from main (independent from lane A)
+      expect(readFileSync(laneBEnvPath, "utf-8")).toBe(originalContent);
+
+      // Verify lane A has modified content
+      expect(readFileSync(laneAEnvPath, "utf-8")).toBe("LANE_A_ENV=modified\n");
+
+      // Verify main still has original
+      expect(readFileSync(path.join(mainDir, ".env"), "utf-8")).toBe(originalContent);
+    });
+
+    test("dependency directories are excluded from copy by default when skipBuildArtifacts is true", async () => {
+      const srcDir = path.join(testDir, "deps-source");
+      const destDir = path.join(testDir, "deps-dest");
+      mkdirSync(srcDir, { recursive: true });
+      mkdirSync(destDir, { recursive: true });
+      setupTestRepo(srcDir);
+
+      // Create dependency directories
+      const nodeModulesPath = path.join(srcDir, "node_modules");
+      mkdirSync(nodeModulesPath, { recursive: true });
+      writeFileSync(path.join(nodeModulesPath, "package.json"), '{"name": "dep"}');
+
+      const venvPath = path.join(srcDir, ".venv");
+      mkdirSync(venvPath, { recursive: true });
+      writeFileSync(path.join(venvPath, "lib.txt"), "python libs");
+
+      // Create .env file (should be copied)
+      writeFileSync(path.join(srcDir, ".env"), "ENV=value");
+
+      // Copy with BUILD_ARTIFACT_PATTERNS (simulating skipBuildArtifacts=true)
+      const { BUILD_ARTIFACT_PATTERNS } = await import("../src/config");
+      const copied = await copyUntrackedFiles(srcDir, destDir, BUILD_ARTIFACT_PATTERNS);
+
+      // .env should be copied
+      expect(existsSync(path.join(destDir, ".env"))).toBe(true);
+
+      // Dependency directories should NOT be copied (excluded)
+      expect(existsSync(path.join(destDir, "node_modules"))).toBe(false);
+      expect(existsSync(path.join(destDir, ".venv"))).toBe(false);
+    });
   });
 
   describe("integration tests", () => {
