@@ -46,10 +46,10 @@ const DEFAULT_CONFIG: LanesConfig = {
   lanes: [],
   settings: {
     copyMode: "full", // Full copy by default
-    skipBuildArtifacts: false, // Copy everything by default
+    skipBuildArtifacts: false, // Copy everything by default (use symlinkDeps instead)
     skipPatterns: [], // User-defined patterns to skip
     autoInstall: true,
-    symlinkDeps: false, // Symlink dependencies instead of copying (off by default for safety)
+    symlinkDeps: true, // Symlink dependencies by default (saves 500MB-2GB+ per lane)
   },
 };
 

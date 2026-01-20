@@ -54,8 +54,20 @@ While you should probably use git worktrees, they don't copy your `.env` files, 
 Run `lane config` to change:
 
 - **Copy Mode**: `full` (default) or `worktree` (experimental)
-- **Skip Build Artifacts**: Skip `node_modules`, `dist`, etc when copying
+- **Symlink Dependencies**: Symlink `node_modules`, `.venv`, etc instead of copying (default: enabled)
 - **Auto Install**: Run `bun install` after creating a lane
+
+### Disk Usage
+
+By default, Lane symlinks dependency directories (`node_modules`, `.venv`, etc.) to save massive disk space:
+
+```
+myapp/               500MB (with node_modules)
+myapp-lane-a/        ~10MB (node_modules is symlinked)
+myapp-lane-b/        ~10MB (node_modules is symlinked)
+```
+
+Disable symlink mode in `lane config` if you need independent dependencies.
 
 ### Worktree mode
 

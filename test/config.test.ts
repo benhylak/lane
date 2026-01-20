@@ -60,6 +60,7 @@ describe("config", () => {
           skipBuildArtifacts: true,
           skipPatterns: ["*.log"],
           autoInstall: false,
+          symlinkDeps: true,
         },
       };
 
@@ -86,6 +87,7 @@ describe("config", () => {
       expect(result.settings.skipBuildArtifacts).toBe(false);
       expect(result.settings.skipPatterns).toEqual([]);
       expect(result.settings.autoInstall).toBe(true);
+      expect(result.settings.symlinkDeps).toBe(true);
     });
 
     test("returns default config when file is empty", async () => {
@@ -97,6 +99,7 @@ describe("config", () => {
       expect(result.version).toBe(1);
       expect(result.lanes).toEqual([]);
       expect(result.settings.copyMode).toBe("full");
+      expect(result.settings.symlinkDeps).toBe(true);
     });
 
     test("merges with defaults for partial config", async () => {
@@ -126,6 +129,7 @@ describe("config", () => {
       expect(result.lanes).toHaveLength(1);
       expect(result.settings.copyMode).toBe("worktree");
       expect(result.settings.skipBuildArtifacts).toBe(true);
+      expect(result.settings.symlinkDeps).toBe(true); // from defaults
     });
 
     test("merges partial settings with defaults", async () => {
@@ -147,6 +151,7 @@ describe("config", () => {
       expect(result.settings.skipBuildArtifacts).toBe(false);
       expect(result.settings.skipPatterns).toEqual(["*.tmp"]);
       expect(result.settings.autoInstall).toBe(true);
+      expect(result.settings.symlinkDeps).toBe(true); // from defaults
       expect(result.lanes).toEqual([]); // from defaults
     });
 
@@ -159,6 +164,7 @@ describe("config", () => {
       expect(result.version).toBe(1);
       expect(result.lanes).toEqual([]);
       expect(result.settings.copyMode).toBe("full");
+      expect(result.settings.symlinkDeps).toBe(true); // from defaults
     });
   });
 
@@ -179,6 +185,7 @@ describe("config", () => {
           skipBuildArtifacts: true,
           skipPatterns: ["*.log"],
           autoInstall: false,
+          symlinkDeps: true,
         },
       };
 
@@ -207,6 +214,7 @@ describe("config", () => {
           skipBuildArtifacts: false,
           skipPatterns: [],
           autoInstall: true,
+          symlinkDeps: true,
         },
       };
 
@@ -227,6 +235,7 @@ describe("config", () => {
           skipBuildArtifacts: true,
           skipPatterns: ["*.tmp"],
           autoInstall: false,
+          symlinkDeps: false,
         },
       };
 
@@ -577,6 +586,70 @@ describe("config", () => {
       expect(BUILD_ARTIFACT_PATTERNS).toContain("node_modules");
       expect(BUILD_ARTIFACT_PATTERNS).toContain(".next");
       expect(BUILD_ARTIFACT_PATTERNS).toContain("dist");
+    });
+  });
+
+  describe("symlinkDeps setting", () => {
+    test("loads config with symlinkDeps disabled", async () => {
+      const configWithSymlinksDisabled: LanesConfig = {
+        version: 1,
+        lanes: [],
+        settings: {
+          copyMode: "full",
+          skipBuildArtifacts: false,
+          skipPatterns: [],
+          autoInstall: true,
+          symlinkDeps: false,
+        },
+      };
+
+      const configPath = getConfigPath(gitRoot);
+      await fs.writeFile(configPath, JSON.stringify(configWithSymlinksDisabled, null, 2));
+
+      const result = await loadConfig(gitRoot);
+
+      expect(result.settings.symlinkDeps).toBe(false);
+    });
+
+    test("merges symlinkDeps setting from partial config", async () => {
+      const partialConfig = {
+        settings: {
+          symlinkDeps: false,
+        },
+      };
+
+      const configPath = getConfigPath(gitRoot);
+      await fs.writeFile(configPath, JSON.stringify(partialConfig, null, 2));
+
+      const result = await loadConfig(gitRoot);
+
+      expect(result.settings.symlinkDeps).toBe(false);
+      expect(result.settings.copyMode).toBe("full"); // other defaults preserved
+      expect(result.settings.autoInstall).toBe(true);
+    });
+
+    test("saves and loads config with symlinkDeps enabled", async () => {
+      const configWithSymlinks: LanesConfig = {
+        version: 1,
+        lanes: [],
+        settings: {
+          copyMode: "worktree",
+          skipBuildArtifacts: true,
+          skipPatterns: ["*.log"],
+          autoInstall: false,
+          symlinkDeps: true,
+        },
+      };
+
+      await saveConfig(gitRoot, configWithSymlinks);
+
+      const loaded = await loadConfig(gitRoot);
+
+      expect(loaded.settings.symlinkDeps).toBe(true);
+      expect(loaded.settings.copyMode).toBe("worktree");
+      expect(loaded.settings.skipBuildArtifacts).toBe(true);
+      expect(loaded.settings.skipPatterns).toEqual(["*.log"]);
+      expect(loaded.settings.autoInstall).toBe(false);
     });
   });
 

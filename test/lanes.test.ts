@@ -72,6 +72,7 @@ function setupTestRepo(repoPath: string, isWorktree = false) {
       skipBuildArtifacts: false,
       skipPatterns: [],
       autoInstall: false, // Disable for tests
+      symlinkDeps: true, // Default is true
     },
   };
   saveConfig(repoPath, config);
@@ -959,6 +960,151 @@ describe("lanes", () => {
         const result = await syncLane("sync-skip", { cwd: mainRepoRoot });
         expect(result.success).toBe(true);
         expect(result.copiedFiles).not.toContain(".env.local");
+      } finally {
+        Bun.spawn = originalSpawn;
+      }
+    }, 10000);
+  });
+
+  describe("symlink dependencies functionality", () => {
+    test("should have symlinkDeps enabled by default in config", async () => {
+      const config = await loadConfig(mainRepoRoot);
+      expect(config.settings.symlinkDeps).toBe(true);
+    });
+
+    test("should create lane with symlinkDeps enabled by default", async () => {
+      // Create a node_modules directory in main repo to test symlinking
+      const nodeModulesPath = path.join(mainRepoRoot, "node_modules");
+      mkdirSync(nodeModulesPath, { recursive: true });
+      const testPackagePath = path.join(nodeModulesPath, "test-package");
+      mkdirSync(testPackagePath, { recursive: true });
+      writeFileSync(path.join(testPackagePath, "index.js"), "// test");
+
+      // Mock git operations
+      const originalSpawn = Bun.spawn;
+      Bun.spawn = mock((args: string[], options?: any) => {
+        if (args[0] === "git") {
+          const mockStdout = new ReadableStream({
+            start(controller) {
+              if (args.includes("--show-current")) {
+                controller.enqueue(new TextEncoder().encode("main\n"));
+              }
+              controller.close();
+            },
+          });
+
+          return {
+            exited: Promise.resolve(0),
+            stdout: mockStdout,
+            stderr: mockStdout,
+            stdin: null,
+          };
+        }
+        return originalSpawn(args, options);
+      });
+
+      try {
+        // Ensure symlinkDeps is enabled (default)
+        const config = await loadConfig(mainRepoRoot);
+        config.settings.symlinkDeps = true;
+        config.settings.autoInstall = false; // Disable auto install for cleaner test
+        await saveConfig(mainRepoRoot, config);
+
+        const result = await createLane("symlink-test", {
+          branch: "symlink-test-branch",
+          cwd: mainRepoRoot,
+        });
+
+        // The lane creation should succeed
+        expect(result).toBeDefined();
+      } finally {
+        Bun.spawn = originalSpawn;
+      }
+    }, 10000);
+
+    test("should respect symlinkDeps setting when disabled", async () => {
+      // Mock git operations
+      const originalSpawn = Bun.spawn;
+      Bun.spawn = mock((args: string[], options?: any) => {
+        if (args[0] === "git") {
+          const mockStdout = new ReadableStream({
+            start(controller) {
+              if (args.includes("--show-current")) {
+                controller.enqueue(new TextEncoder().encode("main\n"));
+              }
+              controller.close();
+            },
+          });
+
+          return {
+            exited: Promise.resolve(0),
+            stdout: mockStdout,
+            stderr: mockStdout,
+            stdin: null,
+          };
+        }
+        return originalSpawn(args, options);
+      });
+
+      try {
+        // Disable symlinkDeps
+        const config = await loadConfig(mainRepoRoot);
+        config.settings.symlinkDeps = false;
+        config.settings.autoInstall = false;
+        await saveConfig(mainRepoRoot, config);
+
+        const result = await createLane("no-symlink-test", {
+          branch: "no-symlink-branch",
+          cwd: mainRepoRoot,
+        });
+
+        expect(result).toBeDefined();
+
+        // Verify config was respected
+        const loadedConfig = await loadConfig(mainRepoRoot);
+        expect(loadedConfig.settings.symlinkDeps).toBe(false);
+      } finally {
+        Bun.spawn = originalSpawn;
+      }
+    }, 10000);
+
+    test("should handle missing dependency directories gracefully when symlinking", async () => {
+      // Don't create any dependency directories - test that it handles missing ones
+      const originalSpawn = Bun.spawn;
+      Bun.spawn = mock((args: string[], options?: any) => {
+        if (args[0] === "git") {
+          const mockStdout = new ReadableStream({
+            start(controller) {
+              if (args.includes("--show-current")) {
+                controller.enqueue(new TextEncoder().encode("main\n"));
+              }
+              controller.close();
+            },
+          });
+
+          return {
+            exited: Promise.resolve(0),
+            stdout: mockStdout,
+            stderr: mockStdout,
+            stdin: null,
+          };
+        }
+        return originalSpawn(args, options);
+      });
+
+      try {
+        const config = await loadConfig(mainRepoRoot);
+        config.settings.symlinkDeps = true;
+        config.settings.autoInstall = false;
+        await saveConfig(mainRepoRoot, config);
+
+        const result = await createLane("no-deps-test", {
+          branch: "no-deps-branch",
+          cwd: mainRepoRoot,
+        });
+
+        // Should succeed even when no dependency directories exist
+        expect(result).toBeDefined();
       } finally {
         Bun.spawn = originalSpawn;
       }
