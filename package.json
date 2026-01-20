@@ -4,13 +4,13 @@
   "description": "A simple alternative to git worktrees",
   "type": "module",
   "bin": {
-    "lane": "./dist/cli.js"
+    "lane": "./lane"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "start": "node dist/cli.js",
-    "prepare": "tsc"
+    "build": "bun build ./src/cli.ts --outfile ./lane --compile --banner '#!/usr/bin/env bun'",
+    "dev": "bun --watch ./src/cli.ts",
+    "start": "./lane",
+    "prepare": "bun run build"
   },
   "keywords": ["git", "worktree", "cli"],
   "author": "",
@@ -21,11 +21,15 @@
     "ink": "^5.0.1",
     "ink-select-input": "^6.0.0",
     "ink-spinner": "^5.0.0",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "react-devtools-core": "^7.0.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/bun": "latest",
     "@types/react": "^18.3.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "trustedDependencies": [
+    "esbuild"
+  ]
 }

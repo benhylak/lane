@@ -14,10 +14,12 @@ Creates a copy of your repo at `my-app-lane-a/` and cd's into it.
 
 ```bash
 git clone https://github.com/benhylak/lane.git
-npm install -g ./lane
+bun install -g ./lane
 lane init-shell
 source ~/.zshrc
 ```
+
+Or use `bunx lane` to run without installing.
 
 ## Usage
 
@@ -53,7 +55,7 @@ Run `lane config` to change:
 
 - **Copy Mode**: `full` (default) or `worktree` (experimental)
 - **Skip Build Artifacts**: Skip `node_modules`, `dist`, etc when copying
-- **Auto Install**: Run `npm install` after creating a lane
+- **Auto Install**: Run `bun install` after creating a lane
 
 ### Worktree mode
 
