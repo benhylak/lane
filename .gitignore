@@ -7,3 +7,4 @@ dist/
 lane
 bun.lock
 coverage/
+lane

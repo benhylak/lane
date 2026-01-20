@@ -612,6 +612,17 @@ export async function createLane(
         // Skip if in exclude list
         if (allExcludes.has(item)) continue;
 
+        // Check if this item is ignored by .gitignore
+        try {
+          const ignoredText = await Bun.$`git check-ignore --quiet "${item}"`.cwd(mainRoot).quiet().text();
+          // If git check-ignore succeeds (exit code 0), the file is ignored - skip it
+          if (ignoredText === "") {
+            continue;
+          }
+        } catch {
+          // Exit code 1 means file is NOT ignored, continue checking
+        }
+
         // Check if this item has any tracked files
         try {
           const trackedText = await Bun.$`git ls-files "${item}" | head -1`.cwd(mainRoot).quiet().text();
