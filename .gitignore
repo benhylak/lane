@@ -8,3 +8,4 @@ lane
 bun.lock
 coverage/
 lane
+lane.mjs

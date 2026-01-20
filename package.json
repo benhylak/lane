@@ -7,8 +7,8 @@
     "lane": "./lane"
   },
   "scripts": {
-    "build": "bun build ./src/cli.ts --outfile ./lane --compile --sourcemap --minify --banner '#!/usr/bin/env bun'",
-    "dev": "bun --watch ./src/cli.ts",
+    "build": "bunx esbuild ./src/cli/index.ts --outfile=./lane.mjs --bundle --platform=node --format=esm --jsx=automatic --jsx-import-source=react && cat > ./lane << 'EOF'\n#!/usr/bin/env bun\nimport(\"./lane.mjs\");\nEOF\nchmod +x ./lane",
+    "dev": "bun --watch ./src/cli/index.ts",
     "start": "./lane",
     "prepare": "bun run build",
     "test": "bun test",
