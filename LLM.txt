@@ -1,192 +1,67 @@
 # Lane - Git Worktree Alternative
 
-## What is Lane?
+Simple CLI for working on multiple git branches simultaneously without stashing.
 
-A CLI tool that provides a simpler alternative to git worktrees. Lets you work on multiple branches simultaneously without stashing or context switching.
-
-## Quick Start
+## Install
 
 ```bash
-# Build the project
 bun run build
-
-# Run the CLI
-./lane                    # Interactive picker
-./lane new feature-x      # Create new lane
-./lane switch feature-x   # Switch to lane
-./lane -                  # Go to previous lane
-./lane main               # Back to main repo
+./lane init-shell    # Add to shell rc file
 ```
 
-## Build System
+Restart shell. Now `lane` function intercepts output and auto-CDs.
 
-**Important:** This project uses **Bun runtime**, not Node.
+## Usage
 
 ```bash
-# Build
-bun run build
-
-# Watch mode (development)
-bun run dev
-
-# Run tests
-bun test
-
-# Test watch mode
-bun run test:watch
+lane                  # Interactive picker (use arrow keys, Enter to switch)
+lane new feature-xyz  # Create new lane
+lane switch feature-xyz  # Switch to existing lane
+lane -                # Go to previous lane
+lane main             # Back to main repo
+lane list             # Show all lanes
+lane remove feature-xyz  # Delete lane
+lane rename new-name  # Rename current lane
+lane status           # Show current lane info
+lane config           # Configure settings
 ```
 
-The build process uses `esbuild` via `bunx` with explicit JSX production runtime:
-- `--jsx=automatic --jsx-import-source=react`
-- Outputs `lane.mjs` (ES module bundle)
-- Creates `lane` executable with shebang wrapper
+## What is a Lane?
 
-## Architecture
+A **lane** is a separate working directory for a git branch.
 
-```
-src/
-├── cli/                    # CLI layer (Commander.js)
-│   ├── index.ts            # Main entry point
-│   ├── utils.ts            # Shared utilities (renderUI, CD_PREFIX)
-│   └── commands/           # Individual command modules (13 files)
-│       ├── new.ts
-│       ├── switch.ts
-│       ├── list.ts
-│       ├── remove.ts
-│       ├── rename.ts
-│       ├── checkout.ts
-│       ├── sync.ts
-│       ├── status.ts
-│       ├── config.ts
-│       ├── edit.ts
-│       ├── init-shell.ts
-│       └── default.ts
-├── ui/                     # UI layer (Ink/React)
-│   ├── LaneList.tsx        # Interactive lane picker
-│   ├── Settings.tsx        # Settings configuration
-│   ├── CheckoutSelector.tsx # Branch checkout UI
-│   └── LaneManager.tsx     # Lane management UI
-├── lanes.ts                # Core lane logic (1150 lines)
-├── git.ts                  # Git operations wrapper (256 lines)
-└── config.ts               # Config persistence (181 lines)
+Two modes:
+- **Worktree** (default): Lightweight, shares .git objects
+- **Full copy**: Complete repo copy, isolated but uses more space
+
+Lanes are stored in `<repo-root>/.lanes/<lane-name>/`
+
+## Smart Checkout
+
+```bash
+lane checkout some-branch
 ```
 
-## Key Technologies
+Finds existing lane for that branch, or creates one automatically.
 
-| Layer | Technology |
-|-------|-----------|
-| Runtime | **Bun** (not Node) |
-| CLI Framework | Commander.js |
-| UI Framework | Ink (React for terminal) |
-| Build | esbuild via bunx |
-| Tests | Bun's built-in test framework |
-| Types | TypeScript with @types/bun |
+## Syncing .env Files
 
-## Bun-Specific APIs Used
-
-**File operations:**
-```typescript
-const file = Bun.file(path);
-const content = await file.text();
-const exists = file.size > 0;
+```bash
+lane sync feature-xyz
 ```
 
-**Process spawning:**
-```typescript
-const proc = Bun.spawn(["git", "status", "--porcelain"], {
-  cwd,
-  stdout: "pipe",
-  stderr: "pipe",
-});
-await proc.exited;
-const output = await new Response(proc.stdout).text();
-```
+Copies .env files from main repo to the lane.
 
-**Template literal syntax:**
-```typescript
-const output = await Bun.$`git rev-parse --show-toplevel`.cwd(cwd).quiet().text();
-```
+## Configuration
+
+Run `lane config` for interactive settings:
+- Copy mode (worktree vs full)
+- Auto-install deps after lane creation
+- Skip build artifacts (dist/, node_modules/.cache/)
+- Symlink node_modules (faster, uses less space)
 
 ## Shell Integration
 
-The CLI outputs a special prefix for shell integration:
-```typescript
-const CD_PREFIX = "__lane_cd:";
-console.log(`${CD_PREFIX}${path}`);  // Shell function intercepts and cd's
-```
+Lane outputs `__lane_cd:/path/to/lane` - shell function intercepts and runs `cd`.
 
-## JSX Production Runtime
-
-**Critical:** The build must use `--jsx=automatic --jsx-import-source=react` to avoid the dev runtime bug. Do NOT use `bun build` directly - it has a bug where it bundles `react/jsx-dev-runtime` regardless of config.
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `lane [name]` | Create or switch to lane (interactive if no args) |
-| `lane -` | Go to previous lane |
-| `lane new <name>` | Create new lane (full copy) |
-| `lane switch <name>` | Switch to existing lane |
-| `lane checkout <branch>` | Smart checkout (find or create lane) |
-| `lane list` | List all lanes |
-| `lane remove <name>` | Delete a lane |
-| `lane rename <name>` | Rename current lane |
-| `lane sync [name]` | Copy .env files from main to lane |
-| `lane status` | Show current lane info |
-| `lane config` | Interactive settings UI |
-| `lane init-shell` | Set up shell integration |
-
-## Lane Modes
-
-1. **Worktree mode** (default): Uses `git worktree` - shares git object database
-2. **Full copy mode**: Complete repository copy - isolated but slower
-
-## Testing
-
-```bash
-# Run all tests
-bun test
-
-# Watch mode
-bun test --watch
-
-# Coverage
-bun test --coverage
-```
-
-Test files:
-- `test/lanes.test.ts` - Core lane operations (1400 lines)
-- `test/git.test.ts` - Git operations (614 lines)
-- `test/config.test.ts` - Config management (726 lines)
-
-## Common Tasks
-
-**Adding a new command:**
-1. Create file in `src/cli/commands/`
-2. Export `registerXxxCommand(program)` function
-3. Import and call in `src/cli/index.ts`
-
-**Modifying UI:**
-- Edit components in `src/ui/`
-- Use Ink primitives: `<Text>`, `<Box>`, `<Flex>`
-- Import via `renderUI()` from `src/cli/utils.ts`
-
-**Git operations:**
-- Use functions from `src/git.ts`
-- All use Bun.spawn for process execution
-
-**Config changes:**
-- Edit `src/config.ts`
-- Uses Bun.file for I/O
-
-## Gitignore Patterns
-
-Build artifacts to ignore:
-- `lane` - executable wrapper
-- `lane.mjs` - bundled output
-- `*.map` - source maps
-- `*-bundle` - bundle files
-
-## Branch
-
-This work is on `bun-migration` branch - a complete migration from npm/Node to Bun runtime.
+Works with Bash, Zsh, Fish.
