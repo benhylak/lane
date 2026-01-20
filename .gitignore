@@ -7,5 +7,6 @@ dist/
 lane
 bun.lock
 coverage/
-lane
 lane.mjs
+*.map
+*-bundle
