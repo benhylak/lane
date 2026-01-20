@@ -55,10 +55,13 @@ Copies .env files from main repo to the lane.
 ## Configuration
 
 Run `lane config` for interactive settings:
-- Copy mode (worktree vs full)
-- Auto-install deps after lane creation
-- Skip build artifacts (dist/, node_modules/.cache/)
-- Symlink node_modules (faster, uses less space)
+
+| Setting | Options | Description |
+|---------|---------|-------------|
+| Copy Mode | worktree / full | Worktree shares .git objects; full is complete copy |
+| Auto Install | yes / no | Run package manager install after creating lane |
+| Skip Build Artifacts | yes / no | Skip dist/, node_modules/.cache/ when copying |
+| Symlink Dependencies | yes / no | Symlink node_modules from main repo (saves 500MB-2GB per lane) |
 
 ## Shell Integration
 
