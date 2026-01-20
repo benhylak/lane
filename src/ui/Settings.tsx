@@ -6,14 +6,16 @@ interface SettingsProps {
   currentMode: CopyMode;
   autoInstall: boolean;
   skipBuildArtifacts: boolean;
-  onSave: (settings: { copyMode: CopyMode; autoInstall: boolean; skipBuildArtifacts: boolean }) => void;
+  symlinkDeps: boolean;
+  onSave: (settings: { copyMode: CopyMode; autoInstall: boolean; skipBuildArtifacts: boolean; symlinkDeps: boolean }) => void;
 }
 
-export function Settings({ currentMode, autoInstall, skipBuildArtifacts, onSave }: SettingsProps) {
+export function Settings({ currentMode, autoInstall, skipBuildArtifacts, symlinkDeps, onSave }: SettingsProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [copyMode, setCopyMode] = useState<CopyMode>(currentMode);
   const [install, setInstall] = useState(autoInstall);
   const [skipArtifacts, setSkipArtifacts] = useState(skipBuildArtifacts);
+  const [symlink, setSymlink] = useState(symlinkDeps);
   const { exit } = useApp();
 
   const options = [
@@ -47,6 +49,16 @@ export function Settings({ currentMode, autoInstall, skipBuildArtifacts, onSave 
         no: "Skip automatic dependency installation",
       },
     },
+    {
+      key: "symlinkDeps",
+      label: "Symlink Dependencies",
+      value: symlink ? "yes" : "no",
+      options: ["no", "yes"],
+      descriptions: {
+        yes: "Create symlinks to main repo's node_modules (fast, saves disk space)",
+        no: "Copy or install dependencies separately for each lane",
+      },
+    },
   ];
 
   useInput((input, key) => {
@@ -66,9 +78,11 @@ export function Settings({ currentMode, autoInstall, skipBuildArtifacts, onSave 
         setSkipArtifacts(opt.options[newIdx] === "yes");
       } else if (opt.key === "autoInstall") {
         setInstall(opt.options[newIdx] === "yes");
+      } else if (opt.key === "symlinkDeps") {
+        setSymlink(opt.options[newIdx] === "yes");
       }
     } else if (key.return || input === "s") {
-      onSave({ copyMode, autoInstall: install, skipBuildArtifacts: skipArtifacts });
+      onSave({ copyMode, autoInstall: install, skipBuildArtifacts: skipArtifacts, symlinkDeps: symlink });
       exit();
     } else if (input === "q" || key.escape) {
       exit();

@@ -258,6 +258,87 @@ export function detectPackageManagers(cwd: string): PackageManager[] {
 }
 
 /**
+ * Create symlink from lane to main repo's dependency directory
+ * Handles platform differences (junction on Windows, symlink on Unix)
+ */
+async function createDependencySymlink(
+  source: string,
+  target: string
+): Promise<{ success: boolean; error?: string }> {
+  // Check if source exists
+  if (!existsSync(source)) {
+    return { success: false, error: `Source does not exist: ${source}` };
+  }
+
+  // Check if target already exists (could be a symlink from a previous attempt)
+  if (existsSync(target)) {
+    try {
+      // Remove it so we can recreate
+      rmSync(target, { recursive: true, force: true });
+    } catch (e) {
+      return { success: false, error: `Target exists and cannot be removed: ${target}` };
+    }
+  }
+
+  try {
+    // Ensure parent directory exists
+    const parentDir = path.dirname(target);
+    if (!existsSync(parentDir)) {
+      mkdirSync(parentDir, { recursive: true });
+    }
+
+    // Use Bun's symlink API with platform-appropriate type
+    // On Windows, use 'junction' for directories; on Unix use 'dir'
+    const isWindows = process.platform === "win32";
+    const symlinkType = isWindows ? "junction" : "dir";
+
+    await Bun.$`ln -s "${source}" "${target}"`.quiet();
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+/**
+ * Create symlinks for dependency directories from main repo to lane
+ */
+async function symlinkDependencies(
+  mainRoot: string,
+  lanePath: string
+): Promise<{ success: boolean; symlinked: string[]; errors: string[] }> {
+  const dependencyDirs = [
+    "node_modules",
+    ".venv",
+    "venv",
+    "vendor",
+    "target",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    "Pods",
+  ];
+
+  const symlinked: string[] = [];
+  const errors: string[] = [];
+
+  for (const dir of dependencyDirs) {
+    const source = path.join(mainRoot, dir);
+    const target = path.join(lanePath, dir);
+
+    const result = await createDependencySymlink(source, target);
+
+    if (result.success) {
+      symlinked.push(dir);
+    } else if (result.error) {
+      errors.push(`${dir}: ${result.error}`);
+    }
+  }
+
+  return { success: symlinked.length > 0, symlinked, errors };
+}
+
+/**
  * Detect and run package manager install
  */
 export async function runPackageInstall(cwd: string): Promise<{ ran: boolean; managers: string[]; errors: string[] }> {
@@ -415,8 +496,55 @@ export async function createLane(
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       process.stderr.write(`\r✓ Copied repository in ${elapsed}s`.padEnd(60) + `\n`);
 
-      // Run install if we skipped build artifacts
-      if (skipArtifacts && config.settings.autoInstall) {
+      // Try to symlink dependencies if enabled
+      if (config.settings.symlinkDeps) {
+        process.stderr.write(`◦ Symlinking dependencies...\n`);
+        const symlinkResult = await symlinkDependencies(mainRoot, lanePath);
+
+        if (symlinkResult.success) {
+          process.stderr.write(`  ✓ Symlinked: ${symlinkResult.symlinked.join(", ")}\n`);
+          // Log any non-fatal errors
+          if (symlinkResult.errors.length > 0) {
+            for (const err of symlinkResult.errors) {
+              process.stderr.write(`  ⚠ ${err}\n`);
+            }
+          }
+        } else {
+          // Symlink failed completely, fall back to package install
+          process.stderr.write(`  ✗ Symlinking failed, falling back to package install\n`);
+          for (const err of symlinkResult.errors) {
+            process.stderr.write(`    ${err}\n`);
+          }
+
+          // Run package install as fallback
+          if (config.settings.autoInstall) {
+            const packageManagers = detectPackageManagers(lanePath);
+            if (packageManagers.length > 0) {
+              process.stderr.write(`◦ Installing dependencies (fallback)...\n`);
+              for (const pm of packageManagers) {
+                try {
+                  process.stderr.write(`  $ ${pm.installCmd}\n`);
+                  const [cmd, ...args] = pm.installCmd.split(" ");
+                  const proc = Bun.spawn([cmd, ...args], {
+                    cwd: lanePath,
+                    stdout: "inherit",
+                    stderr: "inherit",
+                    stdin: "inherit",
+                    env: { ...process.env, FORCE_COLOR: "1" },
+                  });
+                  const exitCode = await proc.exited;
+                  if (exitCode !== 0) {
+                    throw new Error(`Exit code ${exitCode}`);
+                  }
+                  process.stderr.write(`  ✓ ${pm.name} done\n`);
+                } catch {
+                  process.stderr.write(`  ✗ ${pm.name} failed\n`);
+                }
+              }
+            }
+          }
+        }
+      } else if (skipArtifacts && config.settings.autoInstall) {
         const packageManagers = detectPackageManagers(lanePath);
         if (packageManagers.length > 0) {
           process.stderr.write(`◦ Installing dependencies...\n`);
@@ -559,8 +687,60 @@ export async function createLane(
       process.stderr.write(`⚠ Copy failed: ${e.message}\n`);
     }
 
-    // Phase 4: Run package manager install (only in worktree mode)
-    if (config.settings.autoInstall) {
+    // Phase 4: Handle dependencies - try symlinking if enabled, otherwise run install
+    if (config.settings.symlinkDeps) {
+      process.stderr.write(`\n◦ Symlinking dependencies...\n`);
+      const symlinkResult = await symlinkDependencies(mainRoot, lanePath);
+
+      if (symlinkResult.success) {
+        process.stderr.write(`  ✓ Symlinked: ${symlinkResult.symlinked.join(", ")}\n`);
+        // Log any non-fatal errors
+        if (symlinkResult.errors.length > 0) {
+          for (const err of symlinkResult.errors) {
+            process.stderr.write(`  ⚠ ${err}\n`);
+          }
+        }
+      } else {
+        // Symlink failed completely, fall back to package install
+        process.stderr.write(`  ✗ Symlinking failed, falling back to package install\n`);
+        for (const err of symlinkResult.errors) {
+          process.stderr.write(`    ${err}\n`);
+        }
+
+        // Run package install as fallback
+        if (config.settings.autoInstall) {
+          const packageManagers = detectPackageManagers(lanePath);
+          if (packageManagers.length > 0) {
+            process.stderr.write(`\n◦ Installing dependencies (fallback)...\n`);
+            for (const pm of packageManagers) {
+              try {
+                process.stderr.write(`  $ ${pm.installCmd}\n`);
+                const [cmd, ...args] = pm.installCmd.split(" ");
+                const proc = Bun.spawn([cmd, ...args], {
+                  cwd: lanePath,
+                  stdout: "inherit",
+                  stderr: "inherit",
+                  stdin: "inherit",
+                  env: {
+                    ...process.env,
+                    FORCE_COLOR: "1",
+                    npm_config_color: "always",
+                  },
+                });
+                const exitCode = await proc.exited;
+                if (exitCode === 0) {
+                  process.stderr.write(`  ✓ ${pm.name} done\n`);
+                } else {
+                  process.stderr.write(`  ✗ ${pm.name} failed\n`);
+                }
+              } catch (err: any) {
+                process.stderr.write(`  ✗ ${pm.name} failed\n`);
+              }
+            }
+          }
+        }
+      }
+    } else if (config.settings.autoInstall) {
       const packageManagers = detectPackageManagers(lanePath);
       if (packageManagers.length > 0) {
         process.stderr.write(`\n◦ Installing dependencies...\n`);

@@ -505,10 +505,12 @@ program
         currentMode: config.settings.copyMode,
         autoInstall: config.settings.autoInstall,
         skipBuildArtifacts: config.settings.skipBuildArtifacts,
+        symlinkDeps: config.settings.symlinkDeps,
         onSave: async (settings) => {
           config.settings.copyMode = settings.copyMode;
           config.settings.autoInstall = settings.autoInstall;
           config.settings.skipBuildArtifacts = settings.skipBuildArtifacts;
+          config.settings.symlinkDeps = settings.symlinkDeps;
           await saveConfig(mainRoot, config);
           console.error(chalk.green("✓ Settings saved"));
         },

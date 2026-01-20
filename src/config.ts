@@ -17,6 +17,7 @@ export interface LanesConfig {
     skipBuildArtifacts: boolean;
     skipPatterns: string[];
     autoInstall: boolean;
+    symlinkDeps: boolean;
   };
 }
 
@@ -48,6 +49,7 @@ const DEFAULT_CONFIG: LanesConfig = {
     skipBuildArtifacts: false, // Copy everything by default
     skipPatterns: [], // User-defined patterns to skip
     autoInstall: true,
+    symlinkDeps: false, // Symlink dependencies instead of copying (off by default for safety)
   },
 };
 
