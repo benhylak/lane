@@ -2,3 +2,11 @@ node_modules/
 *.log
 .env
 .env.local
+.claude
+dist/
+lane
+bun.lock
+coverage/
+lane.mjs
+*.map
+*-bundle

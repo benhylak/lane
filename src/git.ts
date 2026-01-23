@@ -1,6 +1,5 @@
-import { execSync, spawn } from "child_process";
-import { existsSync } from "fs";
-import path from "path";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 export interface GitRepo {
   root: string;
@@ -12,19 +11,11 @@ export interface GitRepo {
 /**
  * Find the git repository root from the current directory
  */
-export function findGitRepo(cwd: string = process.cwd()): GitRepo | null {
+export async function findGitRepo(cwd: string = process.cwd()): Promise<GitRepo | null> {
   try {
-    const root = execSync("git rev-parse --show-toplevel", {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const root = (await Bun.$`git rev-parse --show-toplevel`.cwd(cwd).quiet().text()).trim();
 
-    const currentBranch = execSync("git branch --show-current", {
-      cwd: root,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const currentBranch = (await Bun.$`git branch --show-current`.cwd(root).quiet().text()).trim();
 
     return {
       root,
@@ -40,13 +31,9 @@ export function findGitRepo(cwd: string = process.cwd()): GitRepo | null {
 /**
  * Check if we're inside a git worktree (not the main repo)
  */
-export function isWorktree(cwd: string = process.cwd()): boolean {
+export async function isWorktree(cwd: string = process.cwd()): Promise<boolean> {
   try {
-    const gitDir = execSync("git rev-parse --git-dir", {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const gitDir = (await Bun.$`git rev-parse --git-dir`.cwd(cwd).quiet().text()).trim();
 
     // If git-dir contains "/worktrees/", we're in a worktree
     return gitDir.includes("/worktrees/");
@@ -58,13 +45,9 @@ export function isWorktree(cwd: string = process.cwd()): boolean {
 /**
  * Get the main worktree path (the original repo)
  */
-export function getMainWorktree(cwd: string = process.cwd()): string | null {
+export async function getMainWorktree(cwd: string = process.cwd()): Promise<string | null> {
   try {
-    const output = execSync("git worktree list --porcelain", {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const output = await Bun.$`git worktree list --porcelain`.cwd(cwd).quiet().text();
 
     // First worktree listed is the main one
     const match = output.match(/^worktree (.+)$/m);
@@ -77,7 +60,7 @@ export function getMainWorktree(cwd: string = process.cwd()): string | null {
 /**
  * Get untracked and ignored items using git status (fast, single command)
  */
-export function getUntrackedFiles(cwd: string): string[] {
+export async function getUntrackedFiles(cwd: string): Promise<string[]> {
   const untrackedItems = new Set<string>();
 
   try {
@@ -85,12 +68,13 @@ export function getUntrackedFiles(cwd: string): string[] {
     // ?? file  - untracked
     // !! file  - ignored
     // It shows directories as "dir/" so we don't get every file inside
-    const output = execSync("git status --ignored --porcelain", {
+    const proc = Bun.spawn(["git", "status", "--ignored", "--porcelain"], {
       cwd,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 50 * 1024 * 1024,
+      stdout: "pipe",
+      stderr: "pipe",
     });
+    await proc.exited;
+    const output = await new Response(proc.stdout).text();
 
     for (const line of output.split("\n")) {
       if (!line) continue;
@@ -122,22 +106,28 @@ export function getUntrackedFiles(cwd: string): string[] {
 /**
  * Create a new git worktree
  */
-export function createWorktree(
+export async function createWorktree(
   repoPath: string,
   worktreePath: string,
   branchName: string,
   createBranch: boolean = true
-): { success: boolean; error?: string } {
+): Promise<{ success: boolean; error?: string }> {
   try {
     const args = createBranch
       ? ["worktree", "add", "-b", branchName, worktreePath]
       : ["worktree", "add", worktreePath, branchName];
 
-    execSync(`git ${args.join(" ")}`, {
+    const proc = Bun.spawn(["git", ...args], {
       cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      stdout: "pipe",
+      stderr: "pipe",
     });
+    await proc.exited;
+
+    if (proc.exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      return { success: false, error: stderr || "Unknown error" };
+    }
 
     return { success: true };
   } catch (e: any) {
@@ -148,16 +138,22 @@ export function createWorktree(
 /**
  * Remove a git worktree
  */
-export function removeWorktree(
+export async function removeWorktree(
   repoPath: string,
   worktreePath: string
-): { success: boolean; error?: string } {
+): Promise<{ success: boolean; error?: string }> {
   try {
-    execSync(`git worktree remove "${worktreePath}" --force`, {
+    const proc = Bun.spawn(["git", "worktree", "remove", worktreePath, "--force"], {
       cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      stdout: "pipe",
+      stderr: "pipe",
     });
+    await proc.exited;
+
+    if (proc.exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      return { success: false, error: stderr || "Unknown error" };
+    }
 
     return { success: true };
   } catch (e: any) {
@@ -168,18 +164,19 @@ export function removeWorktree(
 /**
  * List all worktrees
  */
-export function listWorktrees(
+export async function listWorktrees(
   repoPath: string
-): Array<{ path: string; branch: string; isMain: boolean }> {
+): Promise<Array<{ path: string; branch: string; isMain: boolean }>> {
   try {
-    const output = execSync("git worktree list --porcelain", {
+    const proc = Bun.spawn(["git", "worktree", "list", "--porcelain"], {
       cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      stdout: "pipe",
+      stderr: "pipe",
     });
+    await proc.exited;
+    const output = await new Response(proc.stdout).text();
 
-    const worktrees: Array<{ path: string; branch: string; isMain: boolean }> =
-      [];
+    const worktrees: Array<{ path: string; branch: string; isMain: boolean }> = [];
     const entries = output.split("\n\n").filter((e) => e.trim());
 
     for (const entry of entries) {
@@ -204,13 +201,15 @@ export function listWorktrees(
 /**
  * Check if a branch exists
  */
-export function branchExists(repoPath: string, branchName: string): boolean {
+export async function branchExists(repoPath: string, branchName: string): Promise<boolean> {
   try {
-    execSync(`git show-ref --verify --quiet refs/heads/${branchName}`, {
+    const proc = Bun.spawn(["git", "show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], {
       cwd: repoPath,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdout: "pipe",
+      stderr: "pipe",
     });
-    return true;
+    await proc.exited;
+    return proc.exitCode === 0;
   } catch {
     return false;
   }
@@ -219,18 +218,25 @@ export function branchExists(repoPath: string, branchName: string): boolean {
 /**
  * Delete a branch
  */
-export function deleteBranch(
+export async function deleteBranch(
   repoPath: string,
   branchName: string,
   force: boolean = false
-): { success: boolean; error?: string } {
+): Promise<{ success: boolean; error?: string }> {
   try {
     const flag = force ? "-D" : "-d";
-    execSync(`git branch ${flag} "${branchName}"`, {
+    const proc = Bun.spawn(["git", "branch", flag, branchName], {
       cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      stdout: "pipe",
+      stderr: "pipe",
     });
+    await proc.exited;
+
+    if (proc.exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      return { success: false, error: stderr || "Unknown error" };
+    }
+
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e.message || String(e) };
@@ -240,13 +246,9 @@ export function deleteBranch(
 /**
  * Get the current branch of a git repo/worktree
  */
-export function getCurrentBranch(repoPath: string): string | null {
+export async function getCurrentBranch(repoPath: string): Promise<string | null> {
   try {
-    return execSync("git branch --show-current", {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim() || null;
+    return (await Bun.$`git branch --show-current`.cwd(repoPath).quiet().text()).trim() || null;
   } catch {
     return null;
   }

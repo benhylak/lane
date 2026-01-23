@@ -1,4 +1,3 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
 
 export interface Lane {
@@ -18,6 +17,7 @@ export interface LanesConfig {
     skipBuildArtifacts: boolean;
     skipPatterns: string[];
     autoInstall: boolean;
+    symlinkDeps: boolean;
   };
 }
 
@@ -46,9 +46,10 @@ const DEFAULT_CONFIG: LanesConfig = {
   lanes: [],
   settings: {
     copyMode: "full", // Full copy by default
-    skipBuildArtifacts: false, // Copy everything by default
+    skipBuildArtifacts: false, // Copy everything by default (use symlinkDeps instead)
     skipPatterns: [], // User-defined patterns to skip
     autoInstall: true,
+    symlinkDeps: true, // Symlink dependencies by default (saves 500MB-2GB+ per lane)
   },
 };
 
@@ -64,16 +65,16 @@ export function getConfigPath(gitRoot: string): string {
 /**
  * Load the lanes config, creating default if it doesn't exist
  */
-export function loadConfig(gitRoot: string): LanesConfig {
+export async function loadConfig(gitRoot: string): Promise<LanesConfig> {
   const configPath = getConfigPath(gitRoot);
+  const file = Bun.file(configPath);
 
-  if (!existsSync(configPath)) {
+  if (file.size === 0) {
     return { ...DEFAULT_CONFIG };
   }
 
   try {
-    const content = readFileSync(configPath, "utf-8");
-    const config = JSON.parse(content) as LanesConfig;
+    const config = await file.json() as LanesConfig;
 
     return {
       ...DEFAULT_CONFIG,
@@ -91,19 +92,19 @@ export function loadConfig(gitRoot: string): LanesConfig {
 /**
  * Save the lanes config
  */
-export function saveConfig(gitRoot: string, config: LanesConfig): void {
+export async function saveConfig(gitRoot: string, config: LanesConfig): Promise<void> {
   const configPath = getConfigPath(gitRoot);
-  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  await Bun.write(configPath, JSON.stringify(config, null, 2));
 }
 
 /**
  * Add a lane to the config
  */
-export function addLane(
+export async function addLane(
   gitRoot: string,
   lane: Omit<Lane, "createdAt">
-): LanesConfig {
-  const config = loadConfig(gitRoot);
+): Promise<LanesConfig> {
+  const config = await loadConfig(gitRoot);
 
   // Remove any existing lane with the same name
   config.lanes = config.lanes.filter((l) => l.name !== lane.name);
@@ -113,33 +114,33 @@ export function addLane(
     createdAt: new Date().toISOString(),
   });
 
-  saveConfig(gitRoot, config);
+  await saveConfig(gitRoot, config);
   return config;
 }
 
 /**
  * Remove a lane from the config
  */
-export function removeLane(gitRoot: string, laneName: string): LanesConfig {
-  const config = loadConfig(gitRoot);
+export async function removeLane(gitRoot: string, laneName: string): Promise<LanesConfig> {
+  const config = await loadConfig(gitRoot);
   config.lanes = config.lanes.filter((l) => l.name !== laneName);
-  saveConfig(gitRoot, config);
+  await saveConfig(gitRoot, config);
   return config;
 }
 
 /**
  * Get a lane by name
  */
-export function getLane(gitRoot: string, laneName: string): Lane | null {
-  const config = loadConfig(gitRoot);
+export async function getLane(gitRoot: string, laneName: string): Promise<Lane | null> {
+  const config = await loadConfig(gitRoot);
   return config.lanes.find((l) => l.name === laneName) || null;
 }
 
 /**
  * Get all lanes
  */
-export function getAllLanes(gitRoot: string): Lane[] {
-  const config = loadConfig(gitRoot);
+export async function getAllLanes(gitRoot: string): Promise<Lane[]> {
+  const config = await loadConfig(gitRoot);
   return config.lanes;
 }
 
@@ -153,24 +154,26 @@ function getHistoryPath(gitRoot: string): string {
 /**
  * Record a lane switch in history (for lane - support)
  */
-export function recordLaneSwitch(gitRoot: string, fromPath: string): void {
+export async function recordLaneSwitch(gitRoot: string, fromPath: string): Promise<void> {
   const historyPath = getHistoryPath(gitRoot);
-  writeFileSync(historyPath, fromPath);
+  await Bun.write(historyPath, fromPath);
 }
 
 /**
  * Get the previous lane path (for lane - support)
  */
-export function getPreviousLane(gitRoot: string): string | null {
+export async function getPreviousLane(gitRoot: string): Promise<string | null> {
   const historyPath = getHistoryPath(gitRoot);
+  const file = Bun.file(historyPath);
 
-  if (!existsSync(historyPath)) {
+  if (file.size === 0) {
     return null;
   }
 
   try {
-    const previousPath = readFileSync(historyPath, "utf-8").trim();
-    return existsSync(previousPath) ? previousPath : null;
+    const previousPath = (await file.text()).trim();
+    const previousExists = Bun.file(previousPath).size > 0;
+    return previousExists ? previousPath : null;
   } catch {
     return null;
   }

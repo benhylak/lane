@@ -1,0 +1,70 @@
+# Lane - Git Worktree Alternative
+
+Simple CLI for working on multiple git branches simultaneously without stashing.
+
+## Install
+
+```bash
+bun run build
+./lane init-shell    # Add to shell rc file
+```
+
+Restart shell. Now `lane` function intercepts output and auto-CDs.
+
+## Usage
+
+```bash
+lane                  # Interactive picker (use arrow keys, Enter to switch)
+lane new feature-xyz  # Create new lane
+lane switch feature-xyz  # Switch to existing lane
+lane -                # Go to previous lane
+lane main             # Back to main repo
+lane list             # Show all lanes
+lane remove feature-xyz  # Delete lane
+lane rename new-name  # Rename current lane
+lane status           # Show current lane info
+lane config           # Configure settings
+```
+
+## What is a Lane?
+
+A **lane** is a separate working directory for a git branch.
+
+Two modes:
+- **Worktree** (default): Lightweight, shares .git objects
+- **Full copy**: Complete repo copy, isolated but uses more space
+
+Lanes are stored in `<repo-root>/.lanes/<lane-name>/`
+
+## Smart Checkout
+
+```bash
+lane checkout some-branch
+```
+
+Finds existing lane for that branch, or creates one automatically.
+
+## Syncing .env Files
+
+```bash
+lane sync feature-xyz
+```
+
+Copies .env files from main repo to the lane.
+
+## Configuration
+
+Run `lane config` for interactive settings:
+
+| Setting | Options | Description |
+|---------|---------|-------------|
+| Copy Mode | worktree / full | Worktree shares .git objects; full is complete copy |
+| Auto Install | yes / no | Run package manager install after creating lane |
+| Skip Build Artifacts | yes / no | Skip dist/, node_modules/.cache/ when copying |
+| Symlink Dependencies | yes / no | Symlink node_modules from main repo (saves 500MB-2GB per lane) |
+
+## Shell Integration
+
+Lane outputs `__lane_cd:/path/to/lane` - shell function intercepts and runs `cd`.
+
+Works with Bash, Zsh, Fish.

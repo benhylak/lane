@@ -14,22 +14,27 @@ Creates a copy of your repo at `my-app-lane-a/` and cd's into it.
 
 ```bash
 git clone https://github.com/benhylak/lane.git
-npm install -g ./lane
+bun install -g ./lane
 lane init-shell
 source ~/.zshrc
 ```
 
+Or use `bunx lane` to run without installing.
+
 ## Usage
 
 ```bash
-lane a                  # Create or switch to lane "a"
+lane new <name>         # Create a new lane
+lane switch <name>      # Switch to existing lane
+lane checkout <branch>  # Smart: find lane by branch, or create one
 lane                    # Interactive picker
 lane -                  # Previous lane
 lane main               # Back to main repo
-lane rename b           # Rename current lane to "b"
-lane remove a           # Delete lane "a"
-lane checkout feature/x # Find lane by branch, or create one
-lane sync               # Copy .env files from main
+lane rename <new-name>  # Rename current lane
+lane remove <name>      # Delete a lane
+lane sync [name]        # Copy .env files from main
+lane list               # List all lanes
+lane status             # Show current lane info
 lane config             # Settings
 ```
 
@@ -52,8 +57,31 @@ While you should probably use git worktrees, they don't copy your `.env` files, 
 Run `lane config` to change:
 
 - **Copy Mode**: `full` (default) or `worktree` (experimental)
-- **Skip Build Artifacts**: Skip `node_modules`, `dist`, etc when copying
-- **Auto Install**: Run `npm install` after creating a lane
+- **Symlink Dependencies**: Symlink `node_modules`, `.venv`, etc instead of copying (default: enabled)
+- **Auto Install**: Run `bun install` after creating a lane
+
+### Disk Usage
+
+By default, Lane symlinks dependency directories (`node_modules`, `.venv`, etc.) to save massive disk space:
+
+```
+myapp/               500MB (with node_modules)
+myapp-lane-a/        ~10MB (node_modules is symlinked)
+myapp-lane-b/        ~10MB (node_modules is symlinked)
+```
+
+Disable symlink mode in `lane config` if you need independent dependencies.
+
+### Config Files vs Dependencies
+
+Lane handles **dependencies** and **config files** differently:
+
+| Type | Behavior | Examples |
+|------|----------|----------|
+| **Dependencies** | Symlinked (shared) | `node_modules`, `.venv`, `vendor`, `target`, `.next` |
+| **Config Files** | Copied (independent) | `.env`, `.env.*`, `*.local`, `.secret*` |
+
+**Why?** Each lane may need different environment variables, but dependencies are the same. Modifying `.env` in one lane won't affect others. Use `lane sync` to copy updated config files from main.
 
 ### Worktree mode
 
