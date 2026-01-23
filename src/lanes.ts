@@ -1,3 +1,4 @@
+import { execSync, spawn } from "child_process";
 import {
   existsSync,
   mkdirSync,
@@ -7,8 +8,8 @@ import {
   statSync,
   rmSync,
   writeFileSync,
-} from "node:fs";
-import path from "node:path";
+} from "fs";
+import path from "path";
 import {
   findGitRepo,
   getMainWorktree,
@@ -47,13 +48,13 @@ export interface RemoveLaneResult {
 /**
  * Get the main repo root, even if we're in a worktree or full-copy lane
  */
-export async function getMainRepoRoot(cwd: string = process.cwd()): Promise<string | null> {
+export function getMainRepoRoot(cwd: string = process.cwd()): string | null {
   // Check if we're in a worktree
-  if (await isWorktree(cwd)) {
-    return await getMainWorktree(cwd);
+  if (isWorktree(cwd)) {
+    return getMainWorktree(cwd);
   }
 
-  const repo = await findGitRepo(cwd);
+  const repo = findGitRepo(cwd);
   if (!repo) return null;
 
   // Check if this is a full-copy lane (has .lane-origin marker)
@@ -127,12 +128,12 @@ function copyRecursive(
 /**
  * Copy untracked files from source to destination
  */
-export async function copyUntrackedFiles(
+export function copyUntrackedFiles(
   srcRoot: string,
   destRoot: string,
   skipPatterns: string[]
-): Promise<string[]> {
-  const untrackedFiles = await getUntrackedFiles(srcRoot);
+): string[] {
+  const untrackedFiles = getUntrackedFiles(srcRoot);
   const copiedFiles: string[] = [];
 
   for (const file of untrackedFiles) {
@@ -258,90 +259,9 @@ export function detectPackageManagers(cwd: string): PackageManager[] {
 }
 
 /**
- * Create symlink from lane to main repo's dependency directory
- * Handles platform differences (junction on Windows, symlink on Unix)
- */
-async function createDependencySymlink(
-  source: string,
-  target: string
-): Promise<{ success: boolean; error?: string }> {
-  // Check if source exists
-  if (!existsSync(source)) {
-    return { success: false, error: `Source does not exist: ${source}` };
-  }
-
-  // Check if target already exists (could be a symlink from a previous attempt)
-  if (existsSync(target)) {
-    try {
-      // Remove it so we can recreate
-      rmSync(target, { recursive: true, force: true });
-    } catch (e) {
-      return { success: false, error: `Target exists and cannot be removed: ${target}` };
-    }
-  }
-
-  try {
-    // Ensure parent directory exists
-    const parentDir = path.dirname(target);
-    if (!existsSync(parentDir)) {
-      mkdirSync(parentDir, { recursive: true });
-    }
-
-    // Use Bun's symlink API with platform-appropriate type
-    // On Windows, use 'junction' for directories; on Unix use 'dir'
-    const isWindows = process.platform === "win32";
-    const symlinkType = isWindows ? "junction" : "dir";
-
-    await Bun.$`ln -s "${source}" "${target}"`.quiet();
-
-    return { success: true };
-  } catch (e: any) {
-    return { success: false, error: e.message || String(e) };
-  }
-}
-
-/**
- * Create symlinks for dependency directories from main repo to lane
- */
-async function symlinkDependencies(
-  mainRoot: string,
-  lanePath: string
-): Promise<{ success: boolean; symlinked: string[]; errors: string[] }> {
-  const dependencyDirs = [
-    "node_modules",
-    ".venv",
-    "venv",
-    "vendor",
-    "target",
-    ".next",
-    ".nuxt",
-    ".turbo",
-    "Pods",
-  ];
-
-  const symlinked: string[] = [];
-  const errors: string[] = [];
-
-  for (const dir of dependencyDirs) {
-    const source = path.join(mainRoot, dir);
-    const target = path.join(lanePath, dir);
-
-    const result = await createDependencySymlink(source, target);
-
-    if (result.success) {
-      symlinked.push(dir);
-    } else if (result.error) {
-      errors.push(`${dir}: ${result.error}`);
-    }
-  }
-
-  return { success: symlinked.length > 0, symlinked, errors };
-}
-
-/**
  * Detect and run package manager install
  */
-export async function runPackageInstall(cwd: string): Promise<{ ran: boolean; managers: string[]; errors: string[] }> {
+export function runPackageInstall(cwd: string): { ran: boolean; managers: string[]; errors: string[] } {
   const managers = detectPackageManagers(cwd);
   const ranManagers: string[] = [];
   const errors: string[] = [];
@@ -349,17 +269,7 @@ export async function runPackageInstall(cwd: string): Promise<{ ran: boolean; ma
   for (const pm of managers) {
     try {
       console.log(`Running ${pm.name}: ${pm.installCmd}`);
-      const [cmd, ...args] = pm.installCmd.split(" ");
-      const proc = Bun.spawn([cmd, ...args], {
-        cwd,
-        stdout: "inherit",
-        stderr: "inherit",
-        stdin: "inherit",
-      });
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) {
-        throw new Error(`Process exited with code ${exitCode}`);
-      }
+      execSync(pm.installCmd, { cwd, stdio: "inherit" });
       ranManagers.push(pm.name);
     } catch (e: any) {
       errors.push(`${pm.name}: ${e.message}`);
@@ -380,34 +290,16 @@ export async function createLane(
   } = {}
 ): Promise<CreateLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = await getMainRepoRoot(cwd);
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, error: "Not in a git repository" };
   }
 
-  const config = await loadConfig(mainRoot);
+  const config = loadConfig(mainRoot);
   const copyMode = config.settings.copyMode;
   const lanePath = getLanePath(mainRoot, laneName);
   const branchName = options.branch || laneName;
-
-  // Lane creation uses 4 config settings:
-  //
-  // 1. copyMode: "worktree" | "full"
-  //    - worktree: Uses git worktree (shares .git objects, lightweight)
-  //    - full: Complete rsync copy (isolated but uses more disk space)
-  //
-  // 2. skipBuildArtifacts: boolean (applies to BOTH modes)
-  //    - full mode: Excludes dist/, node_modules/.cache/ from rsync
-  //    - worktree mode: Excludes those patterns when copying untracked files
-  //
-  // 3. symlinkDeps: boolean (applies to BOTH modes)
-  //    - After lane creation, symlinks node_modules from main repo
-  //    - Saves 500MB-2GB per lane
-  //
-  // 4. autoInstall: boolean (applies to BOTH modes)
-  //    - If symlinkDeps fails or is disabled, runs package install
-  //    - Uses detected package manager (bun, npm, pnpm, yarn, etc.)
 
   // Check if lane already exists
   if (existsSync(lanePath)) {
@@ -419,7 +311,11 @@ export async function createLane(
 
   // Check if branch is already used by a worktree
   try {
-    const worktrees = await Bun.$`git worktree list --porcelain`.cwd(mainRoot).quiet().text();
+    const worktrees = execSync("git worktree list --porcelain", {
+      cwd: mainRoot,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
 
     // Check if branch is in use
     const branchInUse = worktrees.includes(`branch refs/heads/${branchName}`);
@@ -442,7 +338,7 @@ export async function createLane(
     path: lanePath,
     branch: branchName,
   };
-  await addLane(mainRoot, lane);
+  addLane(mainRoot, lane);
   process.stderr.write(`\r✓ Registered lane`.padEnd(40) + `\n`);
 
   if (copyMode === "full") {
@@ -465,12 +361,12 @@ export async function createLane(
       const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
       let i = 0;
       let lastSize = 0;
-      const interval = setInterval(async () => {
+      const interval = setInterval(() => {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
 
         // Get dest size for progress
         try {
-          const destDu = await Bun.$`du -sk "${lanePath}"`.quiet().text();
+          const destDu = execSync(`du -sk "${lanePath}" 2>/dev/null`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
           const destSizeKB = parseInt(destDu.split("\t")[0], 10) || 0;
           const destMB = (destSizeKB / 1024).toFixed(0);
           const speed = destSizeKB > lastSize ? `${((destSizeKB - lastSize) / 1024 / 0.5).toFixed(0)} MB/s` : "";
@@ -481,21 +377,17 @@ export async function createLane(
         }
       }, 500);
 
-      const rsync = Bun.spawn([
-        "rsync",
-        "-a",
-        "--delete",
-        ...excludeArgs,
-        `${mainRoot}/`,
-        `${lanePath}/`,
-      ], {
-        stdout: "ignore",
-        stderr: "ignore",
+      await new Promise<void>((resolve, reject) => {
+        const rsync = spawn("rsync", [
+          "-a",
+          "--delete",
+          ...excludeArgs,
+          `${mainRoot}/`,
+          `${lanePath}/`,
+        ], { stdio: "ignore" });
+        rsync.on("close", (code) => code === 0 ? resolve() : reject(new Error(`rsync failed with code ${code}`)));
+        rsync.on("error", reject);
       });
-      const exitCode = await rsync.exited;
-      if (exitCode !== 0) {
-        throw new Error(`rsync failed with code ${exitCode}`);
-      }
 
       clearInterval(interval);
 
@@ -506,7 +398,7 @@ export async function createLane(
       }
 
       // Create and switch to branch
-      await Bun.$`git checkout -B "${branchName}"`.cwd(lanePath).quiet();
+      execSync(`git checkout -B "${branchName}"`, { cwd: lanePath, stdio: "pipe" });
 
       // Write marker file so we can find the main repo from the lane
       writeFileSync(path.join(lanePath, ".lane-origin"), mainRoot);
@@ -514,55 +406,8 @@ export async function createLane(
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       process.stderr.write(`\r✓ Copied repository in ${elapsed}s`.padEnd(60) + `\n`);
 
-      // Try to symlink dependencies if enabled
-      if (config.settings.symlinkDeps) {
-        process.stderr.write(`◦ Symlinking dependencies...\n`);
-        const symlinkResult = await symlinkDependencies(mainRoot, lanePath);
-
-        if (symlinkResult.success) {
-          process.stderr.write(`  ✓ Symlinked: ${symlinkResult.symlinked.join(", ")}\n`);
-          // Log any non-fatal errors
-          if (symlinkResult.errors.length > 0) {
-            for (const err of symlinkResult.errors) {
-              process.stderr.write(`  ⚠ ${err}\n`);
-            }
-          }
-        } else {
-          // Symlink failed completely, fall back to package install
-          process.stderr.write(`  ✗ Symlinking failed, falling back to package install\n`);
-          for (const err of symlinkResult.errors) {
-            process.stderr.write(`    ${err}\n`);
-          }
-
-          // Run package install as fallback
-          if (config.settings.autoInstall) {
-            const packageManagers = detectPackageManagers(lanePath);
-            if (packageManagers.length > 0) {
-              process.stderr.write(`◦ Installing dependencies (fallback)...\n`);
-              for (const pm of packageManagers) {
-                try {
-                  process.stderr.write(`  $ ${pm.installCmd}\n`);
-                  const [cmd, ...args] = pm.installCmd.split(" ");
-                  const proc = Bun.spawn([cmd, ...args], {
-                    cwd: lanePath,
-                    stdout: "inherit",
-                    stderr: "inherit",
-                    stdin: "inherit",
-                    env: { ...process.env, FORCE_COLOR: "1" },
-                  });
-                  const exitCode = await proc.exited;
-                  if (exitCode !== 0) {
-                    throw new Error(`Exit code ${exitCode}`);
-                  }
-                  process.stderr.write(`  ✓ ${pm.name} done\n`);
-                } catch {
-                  process.stderr.write(`  ✗ ${pm.name} failed\n`);
-                }
-              }
-            }
-          }
-        }
-      } else if (skipArtifacts && config.settings.autoInstall) {
+      // Run install if we skipped build artifacts
+      if (skipArtifacts && config.settings.autoInstall) {
         const packageManagers = detectPackageManagers(lanePath);
         if (packageManagers.length > 0) {
           process.stderr.write(`◦ Installing dependencies...\n`);
@@ -570,17 +415,16 @@ export async function createLane(
             try {
               process.stderr.write(`  $ ${pm.installCmd}\n`);
               const [cmd, ...args] = pm.installCmd.split(" ");
-              const proc = Bun.spawn([cmd, ...args], {
-                cwd: lanePath,
-                stdout: "inherit",
-                stderr: "inherit",
-                stdin: "inherit",
-                env: { ...process.env, FORCE_COLOR: "1" },
+              await new Promise<void>((resolve, reject) => {
+                const proc = spawn(cmd, args, {
+                  cwd: lanePath,
+                  stdio: [process.stdin, process.stdout, process.stderr],
+                  shell: true,
+                  env: { ...process.env, FORCE_COLOR: "1" },
+                });
+                proc.on("close", (code) => code === 0 ? resolve() : reject());
+                proc.on("error", reject);
               });
-              const exitCode = await proc.exited;
-              if (exitCode !== 0) {
-                throw new Error(`Exit code ${exitCode}`);
-              }
               process.stderr.write(`  ✓ ${pm.name} done\n`);
             } catch {
               process.stderr.write(`  ✗ ${pm.name} failed\n`);
@@ -590,15 +434,15 @@ export async function createLane(
       }
     } catch (e: any) {
       process.stderr.write(`\r✗ Copy failed: ${e.message}`.padEnd(60) + `\n`);
-      await removeLaneFromConfig(mainRoot, laneName);
+      removeLaneFromConfig(mainRoot, laneName);
       return { success: false, error: e.message };
     }
   } else {
     // Worktree mode (default)
     // Phase 2: Create git worktree
     process.stderr.write(`◦ Creating worktree...`);
-    const branchAlreadyExists = await branchExists(mainRoot, branchName);
-    const worktreeResult = await createWorktree(
+    const branchAlreadyExists = branchExists(mainRoot, branchName);
+    const worktreeResult = createWorktree(
       mainRoot,
       lanePath,
       branchName,
@@ -607,7 +451,7 @@ export async function createLane(
 
     if (!worktreeResult.success) {
       process.stderr.write(`\r✗ Worktree failed`.padEnd(40) + `\n`);
-      await removeLaneFromConfig(mainRoot, laneName);
+      removeLaneFromConfig(mainRoot, laneName);
       return { success: false, error: worktreeResult.error };
     }
     process.stderr.write(`\r✓ Created worktree (branch: ${branchName})`.padEnd(50) + `\n`);
@@ -630,21 +474,13 @@ export async function createLane(
         // Skip if in exclude list
         if (allExcludes.has(item)) continue;
 
-        // Check if this item is ignored by .gitignore
-        try {
-          const ignoredText = await Bun.$`git check-ignore --quiet "${item}"`.cwd(mainRoot).quiet().text();
-          // If git check-ignore succeeds (exit code 0), the file is ignored - skip it
-          if (ignoredText === "") {
-            continue;
-          }
-        } catch {
-          // Exit code 1 means file is NOT ignored, continue checking
-        }
-
         // Check if this item has any tracked files
         try {
-          const trackedText = await Bun.$`git ls-files "${item}" | head -1`.cwd(mainRoot).quiet().text();
-          const tracked = trackedText.trim();
+          const tracked = execSync(`git ls-files "${item}" | head -1`, {
+            cwd: mainRoot,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "pipe"],
+          }).trim();
 
           // If nothing tracked, it's fully untracked - copy it
           if (!tracked) {
@@ -668,7 +504,7 @@ export async function createLane(
           process.stderr.write(`    ${item}...`);
 
           try {
-            await Bun.$`cp -R "${src}" "${dest}"`.quiet();
+            execSync(`cp -R "${src}" "${dest}"`, { stdio: "pipe" });
             process.stderr.write(` done\n`);
           } catch (e) {
             process.stderr.write(` failed\n`);
@@ -684,13 +520,10 @@ export async function createLane(
       try {
         const configPatterns = [".env", ".env.*", "*.local", ".secret*"];
         const findPattern = configPatterns.map(p => `-name "${p}"`).join(" -o ");
-        const proc = Bun.spawn(["find", ".", "-type", "f", "(", ...findPattern.split(" "), "!", "-path", "./.git/*"], {
-          cwd: mainRoot,
-          stdout: "pipe",
-          stderr: "ignore",
-        });
-        await proc.exited;
-        const nestedConfigs = (await new Response(proc.stdout).text()).trim().split("\n").filter(f => f && f !== ".");
+        const nestedConfigs = execSync(
+          `find . -type f \\( ${findPattern} \\) ! -path "./.git/*" 2>/dev/null`,
+          { cwd: mainRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+        ).trim().split("\n").filter(f => f && f !== ".");
 
         let copiedNested = 0;
         for (const file of nestedConfigs) {
@@ -702,8 +535,7 @@ export async function createLane(
             const destDir = path.dirname(dest);
             if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
             try {
-              const cpProc = Bun.spawn(["cp", src, dest], { stdout: "ignore", stderr: "ignore" });
-              await cpProc.exited;
+              execSync(`cp "${src}" "${dest}"`, { stdio: "pipe" });
               copiedNested++;
             } catch {}
           }
@@ -716,60 +548,8 @@ export async function createLane(
       process.stderr.write(`⚠ Copy failed: ${e.message}\n`);
     }
 
-    // Phase 4: Handle dependencies - try symlinking if enabled, otherwise run install
-    if (config.settings.symlinkDeps) {
-      process.stderr.write(`\n◦ Symlinking dependencies...\n`);
-      const symlinkResult = await symlinkDependencies(mainRoot, lanePath);
-
-      if (symlinkResult.success) {
-        process.stderr.write(`  ✓ Symlinked: ${symlinkResult.symlinked.join(", ")}\n`);
-        // Log any non-fatal errors
-        if (symlinkResult.errors.length > 0) {
-          for (const err of symlinkResult.errors) {
-            process.stderr.write(`  ⚠ ${err}\n`);
-          }
-        }
-      } else {
-        // Symlink failed completely, fall back to package install
-        process.stderr.write(`  ✗ Symlinking failed, falling back to package install\n`);
-        for (const err of symlinkResult.errors) {
-          process.stderr.write(`    ${err}\n`);
-        }
-
-        // Run package install as fallback
-        if (config.settings.autoInstall) {
-          const packageManagers = detectPackageManagers(lanePath);
-          if (packageManagers.length > 0) {
-            process.stderr.write(`\n◦ Installing dependencies (fallback)...\n`);
-            for (const pm of packageManagers) {
-              try {
-                process.stderr.write(`  $ ${pm.installCmd}\n`);
-                const [cmd, ...args] = pm.installCmd.split(" ");
-                const proc = Bun.spawn([cmd, ...args], {
-                  cwd: lanePath,
-                  stdout: "inherit",
-                  stderr: "inherit",
-                  stdin: "inherit",
-                  env: {
-                    ...process.env,
-                    FORCE_COLOR: "1",
-                    npm_config_color: "always",
-                  },
-                });
-                const exitCode = await proc.exited;
-                if (exitCode === 0) {
-                  process.stderr.write(`  ✓ ${pm.name} done\n`);
-                } else {
-                  process.stderr.write(`  ✗ ${pm.name} failed\n`);
-                }
-              } catch (err: any) {
-                process.stderr.write(`  ✗ ${pm.name} failed\n`);
-              }
-            }
-          }
-        }
-      }
-    } else if (config.settings.autoInstall) {
+    // Phase 4: Run package manager install (only in worktree mode)
+    if (config.settings.autoInstall) {
       const packageManagers = detectPackageManagers(lanePath);
       if (packageManagers.length > 0) {
         process.stderr.write(`\n◦ Installing dependencies...\n`);
@@ -780,25 +560,25 @@ export async function createLane(
           try {
             process.stderr.write(`  $ ${pm.installCmd}\n`);
             const [cmd, ...args] = pm.installCmd.split(" ");
-            const proc = Bun.spawn([cmd, ...args], {
-              cwd: lanePath,
-              stdout: "inherit",
-              stderr: "inherit",
-              stdin: "inherit",
-              env: {
-                ...process.env,
-                FORCE_COLOR: "1",
-                npm_config_color: "always",
-              },
+            await new Promise<void>((resolve, reject) => {
+              const proc = spawn(cmd, args, {
+                cwd: lanePath,
+                stdio: [process.stdin, process.stdout, process.stderr],
+                shell: true,
+                env: {
+                  ...process.env,
+                  FORCE_COLOR: "1",
+                  npm_config_color: "always",
+                },
+              });
+              proc.on("close", (code) => {
+                if (code === 0) resolve();
+                else reject(new Error(`Exit code ${code}`));
+              });
+              proc.on("error", reject);
             });
-            const exitCode = await proc.exited;
-            if (exitCode === 0) {
-              succeeded++;
-              process.stderr.write(`  ✓ ${pm.name} done\n`);
-            } else {
-              failed++;
-              process.stderr.write(`  ✗ ${pm.name} failed\n`);
-            }
+            succeeded++;
+            process.stderr.write(`  ✓ ${pm.name} done\n`);
           } catch (err: any) {
             failed++;
             process.stderr.write(`  ✗ ${pm.name} failed\n`);
@@ -839,13 +619,13 @@ export async function removeLaneCmd(
   } = {}
 ): Promise<RemoveLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = await getMainRepoRoot(cwd);
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, error: "Not in a git repository" };
   }
 
-  const lane = await getLane(mainRoot, laneName);
+  const lane = getLane(mainRoot, laneName);
 
   if (!lane) {
     return { success: false, error: `Lane not found: ${laneName}` };
@@ -856,21 +636,21 @@ export async function removeLaneCmd(
     try {
       // Rename to trash path (instant) then delete in background
       const trashPath = `${lane.path}.deleting.${Date.now()}`;
-      await Bun.$`mv "${lane.path}" "${trashPath}"`.quiet();
+      execSync(`mv "${lane.path}" "${trashPath}"`, { stdio: "pipe" });
 
       if (!options.silent) {
         process.stderr.write(`✓ Deleted ${laneName}\n`);
       }
 
       // Delete in background (don't wait)
-      Bun.spawn(["rm", "-rf", trashPath], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+      spawn("rm", ["-rf", trashPath], { stdio: "ignore", detached: true }).unref();
     } catch (e: any) {
       // Fallback to direct delete if rename fails
       if (!options.silent) {
         process.stderr.write(`◦ Deleting ${laneName}...`);
       }
       try {
-        await Bun.$`rm -rf "${lane.path}"`.quiet();
+        execSync(`rm -rf "${lane.path}"`, { stdio: "pipe" });
         if (!options.silent) {
           process.stderr.write(` done\n`);
         }
@@ -889,7 +669,7 @@ export async function removeLaneCmd(
   }
 
   // Remove from config
-  await removeLaneFromConfig(mainRoot, laneName);
+  removeLaneFromConfig(mainRoot, laneName);
 
   return { success: true };
 }
@@ -897,25 +677,25 @@ export async function removeLaneCmd(
 /**
  * Get lane to switch to
  */
-export async function getLaneForSwitch(
+export function getLaneForSwitch(
   laneName: string,
   cwd: string = process.cwd()
-): Promise<{ path: string; branch: string } | null> {
-  const mainRoot = await getMainRepoRoot(cwd);
+): { path: string; branch: string } | null {
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return null;
   }
 
   // Check if it's a known lane
-  const lane = await getLane(mainRoot, laneName);
+  const lane = getLane(mainRoot, laneName);
   if (lane && existsSync(lane.path)) {
     return { path: lane.path, branch: lane.branch };
   }
 
   // Check if it's asking for "main" (the original repo)
   if (laneName === "main" || laneName === "origin") {
-    const repo = await findGitRepo(mainRoot);
+    const repo = findGitRepo(mainRoot);
     return repo ? { path: mainRoot, branch: repo.currentBranch } : null;
   }
 
@@ -923,25 +703,25 @@ export async function getLaneForSwitch(
 }
 
 /**
- * List all lanes including the main repo
+ * List all lanes including the main repo by scanning the filesystem
  */
-export async function listAllLanes(cwd: string = process.cwd()): Promise<Array<{
+export function listAllLanes(cwd: string = process.cwd()): Array<{
   name: string;
   path: string;
   branch: string;
   isMain: boolean;
   isCurrent: boolean;
-}>> {
-  const mainRoot = await getMainRepoRoot(cwd);
+}> {
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return [];
   }
 
-  const currentRepo = await findGitRepo(cwd);
-  const currentPath = currentRepo?.root || cwd;
-  const lanes = await getAllLanes(mainRoot);
-  const repo = await findGitRepo(mainRoot);
+  const currentPath = findGitRepo(cwd)?.root || cwd;
+  const repo = findGitRepo(mainRoot);
+  const repoName = path.basename(mainRoot);
+  const parentDir = path.dirname(mainRoot);
 
   const result: Array<{
     name: string;
@@ -962,21 +742,29 @@ export async function listAllLanes(cwd: string = process.cwd()): Promise<Array<{
     });
   }
 
-  // Add lanes - get ACTUAL current branch from each lane directory
-  for (const lane of lanes) {
-    // Get the actual current branch if the lane directory exists
-    const actualBranch = existsSync(lane.path)
-      ? (await getCurrentBranch(lane.path)) || lane.branch
-      : lane.branch;
+  // Scan parent directory for lane folders: {reponame}-lane-*
+  const lanePrefix = `${repoName}-lane-`;
+  try {
+    const entries = readdirSync(parentDir);
+    for (const entry of entries) {
+      if (entry.startsWith(lanePrefix)) {
+        const lanePath = path.join(parentDir, entry);
+        const laneName = entry.slice(lanePrefix.length);
 
-    result.push({
-      name: lane.name,
-      path: lane.path,
-      branch: actualBranch,
-      isMain: false,
-      isCurrent: currentPath === lane.path,
-    });
-  }
+        // Check it's a directory with a .git
+        if (existsSync(path.join(lanePath, ".git"))) {
+          const branch = getCurrentBranch(lanePath) || "unknown";
+          result.push({
+            name: laneName,
+            path: lanePath,
+            branch,
+            isMain: false,
+            isCurrent: currentPath === lanePath,
+          });
+        }
+      }
+    }
+  } catch {}
 
   return result;
 }
@@ -984,11 +772,11 @@ export async function listAllLanes(cwd: string = process.cwd()): Promise<Array<{
 /**
  * Find a lane by its current branch
  */
-export async function findLaneByBranch(
+export function findLaneByBranch(
   branchName: string,
   cwd: string = process.cwd()
-): Promise<{ name: string; path: string; branch: string } | null> {
-  const lanes = await listAllLanes(cwd);
+): { name: string; path: string; branch: string } | null {
+  const lanes = listAllLanes(cwd);
   return lanes.find((l) => l.branch === branchName) || null;
 }
 
@@ -1008,25 +796,25 @@ export async function syncLane(
   } = {}
 ): Promise<SyncResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = await getMainRepoRoot(cwd);
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, copiedFiles: [], error: "Not in a git repository" };
   }
 
-  const config = await loadConfig(mainRoot);
+  const config = loadConfig(mainRoot);
   let targetPath: string;
 
   if (laneName) {
     // Sync to a specific lane
-    const lane = await getLane(mainRoot, laneName);
+    const lane = getLane(mainRoot, laneName);
     if (!lane) {
       return { success: false, copiedFiles: [], error: `Lane not found: ${laneName}` };
     }
     targetPath = lane.path;
   } else {
     // Sync to current directory (if it's a lane)
-    const currentRepo = await findGitRepo(cwd);
+    const currentRepo = findGitRepo(cwd);
     if (!currentRepo || currentRepo.root === mainRoot) {
       return { success: false, copiedFiles: [], error: "Not in a lane. Use 'lane sync <name>' to sync a specific lane." };
     }
@@ -1034,7 +822,7 @@ export async function syncLane(
   }
 
   // Copy untracked files from main to target
-  const copiedFiles = await copyUntrackedFiles(
+  const copiedFiles = copyUntrackedFiles(
     mainRoot,
     targetPath,
     config.settings.skipPatterns
@@ -1058,13 +846,13 @@ export async function renameLane(
   options: { cwd?: string } = {}
 ): Promise<RenameLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = await getMainRepoRoot(cwd);
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, error: "Not in a git repository" };
   }
 
-  const lane = await getLane(mainRoot, oldName);
+  const lane = getLane(mainRoot, oldName);
   if (!lane) {
     return { success: false, error: `Lane not found: ${oldName}` };
   }
@@ -1078,18 +866,18 @@ export async function renameLane(
 
   // Rename the directory
   try {
-    await Bun.$`mv "${lane.path}" "${newPath}"`.quiet();
+    execSync(`mv "${lane.path}" "${newPath}"`, { stdio: "pipe" });
   } catch (e: any) {
     return { success: false, error: `Failed to rename directory: ${e.message}` };
   }
 
   // Update config
-  const config = await loadConfig(mainRoot);
+  const config = loadConfig(mainRoot);
   const laneConfig = config.lanes.find((l) => l.name === oldName);
   if (laneConfig) {
     laneConfig.name = newName;
     laneConfig.path = newPath;
-    await saveConfig(mainRoot, config);
+    saveConfig(mainRoot, config);
   }
 
   return { success: true, newPath };
@@ -1118,7 +906,7 @@ export async function smartLane(
   } = {}
 ): Promise<SmartLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = await getMainRepoRoot(cwd);
+  const mainRoot = getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, action: "none", error: "Not in a git repository" };
@@ -1134,7 +922,7 @@ export async function smartLane(
   }
 
   // 2. Check if lane already exists
-  const existingLane = await getLane(mainRoot, name);
+  const existingLane = getLane(mainRoot, name);
   if (existingLane && existsSync(existingLane.path)) {
     return {
       success: true,
