@@ -25,6 +25,17 @@ export function getMainRepoRoot(cwd = process.cwd()) {
         }
         catch { }
     }
+    // Check if folder name matches lane pattern: {reponame}-lane-{lanename}
+    const dirName = path.basename(repo.root);
+    const laneMatch = dirName.match(/^(.+)-lane-.+$/);
+    if (laneMatch) {
+        const mainRepoName = laneMatch[1];
+        const parentDir = path.dirname(repo.root);
+        const mainRoot = path.join(parentDir, mainRepoName);
+        if (existsSync(mainRoot) && existsSync(path.join(mainRoot, ".git"))) {
+            return mainRoot;
+        }
+    }
     return repo.root;
 }
 /**
