@@ -48,13 +48,13 @@ export interface RemoveLaneResult {
 /**
  * Get the main repo root, even if we're in a worktree or full-copy lane
  */
-export function getMainRepoRoot(cwd: string = process.cwd()): string | null {
+export async function getMainRepoRoot(cwd: string = process.cwd()): Promise<string | null> {
   // Check if we're in a worktree
-  if (isWorktree(cwd)) {
-    return getMainWorktree(cwd);
+  if (await isWorktree(cwd)) {
+    return await getMainWorktree(cwd);
   }
 
-  const repo = findGitRepo(cwd);
+  const repo = await findGitRepo(cwd);
   if (!repo) return null;
 
   // Check if this is a full-copy lane (has .lane-origin marker)
@@ -128,12 +128,12 @@ function copyRecursive(
 /**
  * Copy untracked files from source to destination
  */
-export function copyUntrackedFiles(
+export async function copyUntrackedFiles(
   srcRoot: string,
   destRoot: string,
   skipPatterns: string[]
-): string[] {
-  const untrackedFiles = getUntrackedFiles(srcRoot);
+): Promise<string[]> {
+  const untrackedFiles = await getUntrackedFiles(srcRoot);
   const copiedFiles: string[] = [];
 
   for (const file of untrackedFiles) {
@@ -290,13 +290,13 @@ export async function createLane(
   } = {}
 ): Promise<CreateLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = getMainRepoRoot(cwd);
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, error: "Not in a git repository" };
   }
 
-  const config = loadConfig(mainRoot);
+  const config = await await loadConfig(mainRoot);
   const copyMode = config.settings.copyMode;
   const lanePath = getLanePath(mainRoot, laneName);
   const branchName = options.branch || laneName;
@@ -441,8 +441,8 @@ export async function createLane(
     // Worktree mode (default)
     // Phase 2: Create git worktree
     process.stderr.write(`◦ Creating worktree...`);
-    const branchAlreadyExists = branchExists(mainRoot, branchName);
-    const worktreeResult = createWorktree(
+    const branchAlreadyExists = await branchExists(mainRoot, branchName);
+    const worktreeResult = await createWorktree(
       mainRoot,
       lanePath,
       branchName,
@@ -619,13 +619,13 @@ export async function removeLaneCmd(
   } = {}
 ): Promise<RemoveLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = getMainRepoRoot(cwd);
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, error: "Not in a git repository" };
   }
 
-  const lane = getLane(mainRoot, laneName);
+  const lane = await await getLane(mainRoot, laneName);
 
   if (!lane) {
     return { success: false, error: `Lane not found: ${laneName}` };
@@ -665,7 +665,7 @@ export async function removeLaneCmd(
 
   // Delete branch from main repo if requested
   if (options.deleteBranch && lane.branch) {
-    deleteBranch(mainRoot, lane.branch, options.force);
+    await deleteBranch(mainRoot, lane.branch, options.force);
   }
 
   // Remove from config
@@ -677,25 +677,25 @@ export async function removeLaneCmd(
 /**
  * Get lane to switch to
  */
-export function getLaneForSwitch(
+export async function getLaneForSwitch(
   laneName: string,
   cwd: string = process.cwd()
-): { path: string; branch: string } | null {
-  const mainRoot = getMainRepoRoot(cwd);
+): Promise<{ path: string; branch: string } | null> {
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return null;
   }
 
   // Check if it's a known lane
-  const lane = getLane(mainRoot, laneName);
+  const lane = await getLane(mainRoot, laneName);
   if (lane && existsSync(lane.path)) {
     return { path: lane.path, branch: lane.branch };
   }
 
   // Check if it's asking for "main" (the original repo)
   if (laneName === "main" || laneName === "origin") {
-    const repo = findGitRepo(mainRoot);
+    const repo = await findGitRepo(mainRoot);
     return repo ? { path: mainRoot, branch: repo.currentBranch } : null;
   }
 
@@ -705,21 +705,22 @@ export function getLaneForSwitch(
 /**
  * List all lanes including the main repo by scanning the filesystem
  */
-export function listAllLanes(cwd: string = process.cwd()): Array<{
+export async function listAllLanes(cwd: string = process.cwd()): Promise<Array<{
   name: string;
   path: string;
   branch: string;
   isMain: boolean;
   isCurrent: boolean;
-}> {
-  const mainRoot = getMainRepoRoot(cwd);
+}>> {
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return [];
   }
 
-  const currentPath = findGitRepo(cwd)?.root || cwd;
-  const repo = findGitRepo(mainRoot);
+  const currentRepo = await findGitRepo(cwd);
+  const currentPath = currentRepo?.root || cwd;
+  const repo = await findGitRepo(mainRoot);
   const repoName = path.basename(mainRoot);
   const parentDir = path.dirname(mainRoot);
 
@@ -753,7 +754,7 @@ export function listAllLanes(cwd: string = process.cwd()): Array<{
 
         // Check it's a directory with a .git
         if (existsSync(path.join(lanePath, ".git"))) {
-          const branch = getCurrentBranch(lanePath) || "unknown";
+          const branch = await getCurrentBranch(lanePath) || "unknown";
           result.push({
             name: laneName,
             path: lanePath,
@@ -772,11 +773,11 @@ export function listAllLanes(cwd: string = process.cwd()): Array<{
 /**
  * Find a lane by its current branch
  */
-export function findLaneByBranch(
+export async function findLaneByBranch(
   branchName: string,
   cwd: string = process.cwd()
-): { name: string; path: string; branch: string } | null {
-  const lanes = listAllLanes(cwd);
+): Promise<{ name: string; path: string; branch: string } | null> {
+  const lanes = await listAllLanes(cwd);
   return lanes.find((l) => l.branch === branchName) || null;
 }
 
@@ -796,25 +797,25 @@ export async function syncLane(
   } = {}
 ): Promise<SyncResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = getMainRepoRoot(cwd);
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, copiedFiles: [], error: "Not in a git repository" };
   }
 
-  const config = loadConfig(mainRoot);
+  const config = await loadConfig(mainRoot);
   let targetPath: string;
 
   if (laneName) {
     // Sync to a specific lane
-    const lane = getLane(mainRoot, laneName);
+    const lane = await getLane(mainRoot, laneName);
     if (!lane) {
       return { success: false, copiedFiles: [], error: `Lane not found: ${laneName}` };
     }
     targetPath = lane.path;
   } else {
     // Sync to current directory (if it's a lane)
-    const currentRepo = findGitRepo(cwd);
+    const currentRepo = await findGitRepo(cwd);
     if (!currentRepo || currentRepo.root === mainRoot) {
       return { success: false, copiedFiles: [], error: "Not in a lane. Use 'lane sync <name>' to sync a specific lane." };
     }
@@ -822,7 +823,7 @@ export async function syncLane(
   }
 
   // Copy untracked files from main to target
-  const copiedFiles = copyUntrackedFiles(
+  const copiedFiles = await copyUntrackedFiles(
     mainRoot,
     targetPath,
     config.settings.skipPatterns
@@ -846,13 +847,13 @@ export async function renameLane(
   options: { cwd?: string } = {}
 ): Promise<RenameLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = getMainRepoRoot(cwd);
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, error: "Not in a git repository" };
   }
 
-  const lane = getLane(mainRoot, oldName);
+  const lane = await getLane(mainRoot, oldName);
   if (!lane) {
     return { success: false, error: `Lane not found: ${oldName}` };
   }
@@ -872,7 +873,7 @@ export async function renameLane(
   }
 
   // Update config
-  const config = loadConfig(mainRoot);
+  const config = await loadConfig(mainRoot);
   const laneConfig = config.lanes.find((l) => l.name === oldName);
   if (laneConfig) {
     laneConfig.name = newName;
@@ -906,7 +907,7 @@ export async function smartLane(
   } = {}
 ): Promise<SmartLaneResult> {
   const cwd = options.cwd || process.cwd();
-  const mainRoot = getMainRepoRoot(cwd);
+  const mainRoot = await getMainRepoRoot(cwd);
 
   if (!mainRoot) {
     return { success: false, action: "none", error: "Not in a git repository" };
@@ -922,7 +923,7 @@ export async function smartLane(
   }
 
   // 2. Check if lane already exists
-  const existingLane = getLane(mainRoot, name);
+  const existingLane = await getLane(mainRoot, name);
   if (existingLane && existsSync(existingLane.path)) {
     return {
       success: true,
